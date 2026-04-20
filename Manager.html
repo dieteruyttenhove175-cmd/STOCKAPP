@@ -898,7 +898,7 @@
     </div>
 
     <script>
-      const SESSION_ID = '<?= currentSessionId ?>';
+      const SESSION_ID = sessionStorage.getItem('stockapp.sid') || '';
       const CURRENT_USER_NAME = '<?= currentUserName ?>';
       const CURRENT_USER_ROLE = '<?= currentUserRole ?>';
       const CURRENT_AUTH_MODE = '<?= currentAuthMode ?>';
