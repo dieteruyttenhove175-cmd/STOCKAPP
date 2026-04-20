@@ -1,0 +1,27 @@
+<div id="popupOverlay">
+  <div id="popupBox">
+    <div id="popupMessage">Actie uitgevoerd</div>
+    <div class="popup-actions">
+      <button type="button" onclick="closePopup()">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmOverlay">
+  <div id="confirmBox">
+    <div id="confirmTitle">Bevestigen</div>
+    <div id="confirmMessage">Ben je zeker dat je deze actie wil uitvoeren?</div>
+    <div class="popup-actions">
+      <button type="button" class="btn-light" onclick="closeConfirmPopup()">Annuleren</button>
+      <button type="button" id="confirmOkBtn">Bevestigen</button>
+    </div>
+  </div>
+</div>
+
+<div id="busyOverlay">
+  <div id="busyBox">
+    <div class="spinner"></div>
+    <div id="busyTitle">Bezig</div>
+    <div id="busyMessage">Backend verwerkt je actie...</div>
+  </div>
+</div>

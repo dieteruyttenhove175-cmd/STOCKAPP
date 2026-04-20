@@ -1,0 +1,232 @@
+<script>
+  let __uiConfirmCallback = null;
+  let __uiBusyCounter = 0;
+
+  function openPopup(message) {
+    const el = document.getElementById('popupMessage');
+    if (el) el.textContent = message || 'Actie uitgevoerd.';
+    const overlay = document.getElementById('popupOverlay');
+    if (overlay) overlay.style.display = 'flex';
+  }
+
+  function closePopup() {
+    const overlay = document.getElementById('popupOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function openConfirmPopup(config) {
+    const titleEl = document.getElementById('confirmTitle');
+    const messageEl = document.getElementById('confirmMessage');
+    const okBtn = document.getElementById('confirmOkBtn');
+    const overlay = document.getElementById('confirmOverlay');
+
+    if (titleEl) titleEl.textContent = (config && config.title) || 'Bevestigen';
+    if (messageEl) messageEl.textContent = (config && config.message) || 'Ben je zeker dat je deze actie wil uitvoeren?';
+
+    __uiConfirmCallback = config && typeof config.onConfirm === 'function'
+      ? config.onConfirm
+      : null;
+
+    if (okBtn) {
+      okBtn.textContent = (config && config.okText) || 'Bevestigen';
+      okBtn.onclick = function () {
+        closeConfirmPopup();
+        if (__uiConfirmCallback) {
+          const cb = __uiConfirmCallback;
+          __uiConfirmCallback = null;
+          cb();
+        }
+      };
+    }
+
+    if (overlay) overlay.style.display = 'flex';
+  }
+
+  function closeConfirmPopup() {
+    const overlay = document.getElementById('confirmOverlay');
+    if (overlay) overlay.style.display = 'none';
+    __uiConfirmCallback = null;
+  }
+
+  function openBusyOverlay(message, title) {
+    __uiBusyCounter++;
+
+    const titleEl = document.getElementById('busyTitle');
+    const messageEl = document.getElementById('busyMessage');
+    const overlay = document.getElementById('busyOverlay');
+
+    if (titleEl) titleEl.textContent = title || 'Bezig';
+    if (messageEl) messageEl.textContent = message || 'Backend verwerkt je actie...';
+    if (overlay) overlay.style.display = 'flex';
+  }
+
+  function closeBusyOverlay() {
+    __uiBusyCounter = Math.max(0, __uiBusyCounter - 1);
+    if (__uiBusyCounter > 0) return;
+
+    const overlay = document.getElementById('busyOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function showSuccess(message) {
+    const box = document.getElementById('successBox');
+    if (box) {
+      box.textContent = message || 'Actie uitgevoerd.';
+      box.style.display = 'block';
+      setTimeout(() => {
+        box.style.display = 'none';
+      }, 5000);
+    }
+    openPopup(message || 'Actie uitgevoerd.');
+  }
+
+  function showError(message) {
+    const box = document.getElementById('errorBox');
+    if (box) {
+      box.textContent = message || 'Er is een fout opgetreden.';
+      box.style.display = 'block';
+    }
+    openPopup(message || 'Er is een fout opgetreden.');
+  }
+
+  function clearError() {
+    const box = document.getElementById('errorBox');
+    if (box) box.style.display = 'none';
+  }
+
+  function setButtonBusy(buttonEl, busy, busyText) {
+    if (!buttonEl) return;
+
+    if (busy) {
+      if (!buttonEl.dataset.originalText) {
+        buttonEl.dataset.originalText = buttonEl.textContent || '';
+      }
+      buttonEl.disabled = true;
+      buttonEl.textContent = busyText || 'Bezig...';
+    } else {
+      buttonEl.disabled = false;
+      if (buttonEl.dataset.originalText) {
+        buttonEl.textContent = buttonEl.dataset.originalText;
+      }
+    }
+  }
+
+  function setContainerBusy(containerSelector, busy) {
+    if (!containerSelector) return;
+    document.querySelectorAll(containerSelector).forEach(el => {
+      el.classList.toggle('ui-busy-disabled', !!busy);
+    });
+  }
+
+  function callBackendAction(actionName, payload) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)[actionName](payload);
+    });
+  }
+
+  async function runConfirmedAction(config) {
+    const {
+      button,
+      confirmTitle,
+      confirmMessage,
+      confirmOkText,
+      busyTitle,
+      busyMessage,
+      busyButtonText,
+      actionName,
+      payload,
+      onSuccess,
+      onError,
+      blockSelector
+    } = config || {};
+
+    openConfirmPopup({
+      title: confirmTitle || 'Bevestigen',
+      message: confirmMessage || 'Ben je zeker dat je deze actie wil uitvoeren?',
+      okText: confirmOkText || 'Bevestigen',
+      onConfirm: async () => {
+        clearError();
+        setButtonBusy(button, true, busyButtonText || 'Bezig...');
+        if (blockSelector) setContainerBusy(blockSelector, true);
+        openBusyOverlay(busyMessage || 'Backend verwerkt je actie...', busyTitle || 'Bezig');
+
+        try {
+          const result = await callBackendAction(actionName, payload);
+          closeBusyOverlay();
+          setButtonBusy(button, false);
+          if (blockSelector) setContainerBusy(blockSelector, false);
+
+          showSuccess((result && result.message) || 'Actie uitgevoerd.');
+          if (typeof onSuccess === 'function') onSuccess(result);
+        } catch (err) {
+          closeBusyOverlay();
+          setButtonBusy(button, false);
+          if (blockSelector) setContainerBusy(blockSelector, false);
+
+          const message = err && err.message ? err.message : 'Onbekende fout.';
+          showError(message);
+          if (typeof onError === 'function') onError(err);
+        }
+      }
+    });
+  }
+
+  async function runConfirmedActionSequence(config) {
+    const {
+      button,
+      confirmTitle,
+      confirmMessage,
+      confirmOkText,
+      busyTitle,
+      busyMessage,
+      busyButtonText,
+      steps,
+      onSuccess,
+      onError,
+      blockSelector
+    } = config || {};
+
+    openConfirmPopup({
+      title: confirmTitle || 'Bevestigen',
+      message: confirmMessage || 'Ben je zeker dat je deze actie wil uitvoeren?',
+      okText: confirmOkText || 'Bevestigen',
+      onConfirm: async () => {
+        clearError();
+        setButtonBusy(button, true, busyButtonText || 'Bezig...');
+        if (blockSelector) setContainerBusy(blockSelector, true);
+        openBusyOverlay(busyMessage || 'Backend verwerkt je actie...', busyTitle || 'Bezig');
+
+        try {
+          let lastResult = null;
+
+          for (const step of (steps || [])) {
+            const actionName = step.actionName;
+            const payload = typeof step.payload === 'function' ? step.payload(lastResult) : step.payload;
+            lastResult = await callBackendAction(actionName, payload);
+
+            if (typeof step.afterStep === 'function') {
+              step.afterStep(lastResult);
+            }
+          }
+
+          closeBusyOverlay();
+          setButtonBusy(button, false);
+          if (blockSelector) setContainerBusy(blockSelector, false);
+
+          showSuccess((lastResult && lastResult.message) || 'Actie uitgevoerd.');
+          if (typeof onSuccess === 'function') onSuccess(lastResult);
+        } catch (err) {
+          closeBusyOverlay();
+          setButtonBusy(button, false);
+          if (blockSelector) setContainerBusy(blockSelector, false);
+
+          const message = err && err.message ? err.message : 'Onbekende fout.';
+          showError(message);
+          if (typeof onError === 'function') onError(err);
+        }
+      }
+    });
+  }
+</script>

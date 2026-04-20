@@ -1,0 +1,51 @@
+<style>
+  .grid-1 { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .grid-master-detail { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
+
+  .sticky-actions {
+    position: sticky;
+    bottom: 0;
+    background: #fff;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+    z-index: 5;
+  }
+
+  .list-cards {
+    display: grid;
+    gap: 12px;
+  }
+
+  .list-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 14px;
+    background: #fff;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  .primary-action {
+    min-height: 48px;
+    font-weight: 700;
+  }
+
+  @media (max-width: 1100px) {
+    .grid-3 { grid-template-columns: 1fr 1fr; }
+    .grid-master-detail { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 768px) {
+    .grid-2,
+    .grid-3 {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

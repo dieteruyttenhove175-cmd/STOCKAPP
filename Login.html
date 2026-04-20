@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --line: #e2e8f0;
+        --text: #0f172a;
+        --muted: #475569;
+        --primary: #0f172a;
+        --danger: #fee2e2;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+      }
+
+      .card {
+        width: 100%;
+        max-width: 460px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 24px;
+      }
+
+      h1 { margin: 0 0 10px; }
+      .muted { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+
+      label {
+        display: block;
+        font-weight: 700;
+        margin-bottom: 6px;
+        margin-top: 12px;
+      }
+
+      input, button {
+        width: 100%;
+        border-radius: 12px;
+        font-size: 16px;
+      }
+
+      input {
+        border: 1px solid var(--line);
+        padding: 12px;
+      }
+
+      button {
+        margin-top: 18px;
+        border: 0;
+        background: var(--primary);
+        color: #fff;
+        padding: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .error {
+        display: none;
+        margin-top: 14px;
+        background: var(--danger);
+        border: 1px solid #ef4444;
+        border-radius: 12px;
+        padding: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>DigiQS login</h1>
+      <div class="muted">Niet voor admin. Admin gebruikt het Google-account.</div>
+
+      <label for="loginEmail">Login-email</label>
+      <input id="loginEmail" type="email" autocomplete="username">
+
+      <label for="loginCode">Code</label>
+      <input id="loginCode" type="password" autocomplete="current-password">
+
+      <button id="loginBtn" onclick="doLogin()">Inloggen</button>
+
+      <div id="errorBox" class="error"></div>
+    </div>
+
+    <script>
+      const TARGET_VIEW = '<?= targetView ?>';
+      const TARGET_TECH_REF = '<?= targetTechRef ?>';
+      const LOGIN_ERROR = '<?= loginError ?>';
+
+      function showError(message) {
+        const box = document.getElementById('errorBox');
+        box.textContent = message || 'Login mislukt.';
+        box.style.display = 'block';
+      }
+
+      function baseUrl() {
+        return window.location.href.split('?')[0];
+      }
+
+      function buildTargetUrl(result) {
+        const url = new URL(baseUrl());
+        const user = result.user || {};
+
+        if (TARGET_VIEW) {
+          url.searchParams.set('view', TARGET_VIEW);
+        } else if (user.rol === 'Magazijn') {
+          url.searchParams.set('view', 'warehouse');
+        } else if (user.rol === 'Manager' || user.rol === 'Analyse') {
+          url.searchParams.set('view', 'manager');
+        }
+
+        if (TARGET_TECH_REF) {
+          url.searchParams.set('tech', TARGET_TECH_REF);
+        } else if (!TARGET_VIEW && user.rol === 'Technieker' && user.techniekerCode) {
+          url.searchParams.set('tech', user.techniekerCode);
+        }
+
+        url.searchParams.set('sid', result.sessionId);
+        return url.toString();
+      }
+
+      function doLogin() {
+        document.getElementById('errorBox').style.display = 'none';
+
+        const loginEmail = (document.getElementById('loginEmail').value || '').trim();
+        const loginCode = (document.getElementById('loginCode').value || '').trim();
+
+        if (!loginEmail) {
+          showError('Login-email ontbreekt.');
+          return;
+        }
+
+        if (!loginCode) {
+          showError('Code ontbreekt.');
+          return;
+        }
+
+        const btn = document.getElementById('loginBtn');
+        btn.disabled = true;
+        btn.textContent = 'Inloggen...';
+
+        google.script.run
+          .withSuccessHandler(result => {
+            window.location.href = buildTargetUrl(result);
+          })
+          .withFailureHandler(err => {
+            showError(err && err.message ? err.message : 'Login mislukt.');
+            btn.disabled = false;
+            btn.textContent = 'Inloggen';
+          })
+          .loginWithCode({
+            loginEmail,
+            loginCode
+          });
+      }
+
+      document.getElementById('loginCode').addEventListener('keydown', e => {
+        if (e.key === 'Enter') doLogin();
+      });
+
+      if (LOGIN_ERROR) {
+        showError(LOGIN_ERROR);
+      }
+    </script>
+  </body>
+</html>
