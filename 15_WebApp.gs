@@ -116,7 +116,7 @@ function assertPageAccess(fileName, user, techRef) {
 
   if (fileName === 'Manager') {
     if (!roleAllowed(user, [ROLE.MANAGER, ROLE.ANALYSIS])) {
-      throw new Error('Deze pagina is enkel voor manager of analyse.');
+      throw new Error('Deze pagina is enkel voor manager, analyse of admin.');
     }
     return {};
   }
@@ -131,7 +131,7 @@ function buildPageTemplateContext(fileName, user, techRef, sessionId) {
     techRef: safeText(techRef),
     ...authContext,
 
-    // nieuw: alleen voor eerste bootstrap in de browser
+    // Alleen voor eerste browser-bootstrap
     bootstrapSessionId: safeText(sessionId || '')
   };
 
