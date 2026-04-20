@@ -4,24 +4,18 @@
 
 function getForbiddenOutput(message) {
   return HtmlService
-    .createHtmlOutput(
-      `<html>
-        <body style="font-family:Arial,sans-serif;padding:24px;background:#f8fafc;color:#0f172a;">
-          <div style="max-width:720px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:24px;">
-            <h2 style="margin-top:0;">Geen toegang</h2>
-            <div>${String(message || 'Je hebt geen toegang tot deze pagina.')}</div>
-          </div>
-        </body>
-      </html>`
-    )
+    .createHtmlOutput(`
+## Geen toegang
+
+${String(message || 'Je hebt geen toegang tot deze pagina.')}
+`)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
-
 
 function evaluateTemplateWithData(fileName, templateData, pageTitle) {
   const template = HtmlService.createTemplateFromFile(fileName);
 
-  Object.keys(templateData || {}).forEach(key => {
+  Object.keys(templateData || {}).forEach(function (key) {
     template[key] = templateData[key];
   });
 
@@ -76,7 +70,6 @@ function resolveTargetFileName(view, user) {
   if (requestedView === 'mobile') return 'MobileWarehouse';
 
   if (!user) return 'Index';
-
   if (user.rol === ROLE.WAREHOUSE) return 'Warehouse';
   if (user.rol === ROLE.MOBILE_WAREHOUSE) return 'MobileWarehouse';
   if (user.rol === ROLE.MANAGER || user.rol === ROLE.ANALYSIS) return 'Manager';
@@ -123,7 +116,7 @@ function assertPageAccess(fileName, user, techRef) {
 
   if (fileName === 'Manager') {
     if (!roleAllowed(user, [ROLE.MANAGER, ROLE.ANALYSIS])) {
-      throw new Error('Deze pagina is enkel voor manager, analyse of admin.');
+      throw new Error('Deze pagina is enkel voor manager of analyse.');
     }
     return {};
   }
@@ -136,7 +129,10 @@ function buildPageTemplateContext(fileName, user, techRef, sessionId) {
 
   const context = {
     techRef: safeText(techRef),
-    ...authContext
+    ...authContext,
+
+    // nieuw: alleen voor eerste bootstrap in de browser
+    bootstrapSessionId: safeText(sessionId || '')
   };
 
   if (fileName === 'Index') {
@@ -156,12 +152,7 @@ function buildPageTemplateContext(fileName, user, techRef, sessionId) {
 
 function renderLoginPage(view, techRef, sid) {
   const context = buildLoginTemplateContext(view, techRef, sid);
-
-  return evaluateTemplateWithData(
-    'Login',
-    context,
-    'DigiQS Login'
-  );
+  return evaluateTemplateWithData('Login', context, 'DigiQS Login');
 }
 
 function renderAppPage(fileName, user, techRef, sessionId) {
@@ -169,12 +160,7 @@ function renderAppPage(fileName, user, techRef, sessionId) {
   const pageTitle = templateContext.pageTitle || APP_CONFIG.DEFAULT_PAGE_TITLE || 'DigiQS Warehouse';
 
   if (fileName === 'MobileWarehouse') {
-    return evaluateTemplateWithFallback(
-      'MobileWarehouse',
-      'Warehouse',
-      templateContext,
-      pageTitle
-    );
+    return evaluateTemplateWithFallback('MobileWarehouse', 'Warehouse', templateContext, pageTitle);
   }
 
   return evaluateTemplateWithData(fileName, templateContext, pageTitle);
@@ -196,8 +182,9 @@ function doGet(e) {
     assertPageAccess(fileName, user, techRef);
 
     return renderAppPage(fileName, user, techRef, sid);
-
   } catch (err) {
-    return getForbiddenOutput(err && err.message ? err.message : 'Onbekende fout bij openen van de pagina.');
+    return getForbiddenOutput(
+      err && err.message ? err.message : 'Onbekende fout bij openen van de pagina.'
+    );
   }
 }
