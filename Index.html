@@ -571,7 +571,7 @@
       const TECH_REF = '<?= techRef ?>';
       const CURRENT_USER_NAME = '<?= currentUserName ?>';
       const CURRENT_USER_ROLE = '<?= currentUserRole ?>';
-      const SESSION_ID = '<?= currentSessionId ?>';
+      const SESSION_ID = sessionStorage.getItem('stockapp.sid') || '';
       const AUTH_MODE = '<?= currentAuthMode ?>';
     </script>
 
