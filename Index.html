@@ -1,4 +1,20 @@
 <!DOCTYPE html>
+  (function () {
+    const bootstrapSid = <?= JSON.stringify(typeof bootstrapSessionId !== 'undefined' ? bootstrapSessionId : '') ?>;
+    const storageKey = 'stockapp.sid';
+
+    if (bootstrapSid) {
+      sessionStorage.setItem(storageKey, bootstrapSid);
+
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('sid')) {
+        url.searchParams.delete('sid');
+        const qs = url.searchParams.toString();
+        const newUrl = url.pathname + (qs ? '?' + qs : '') + url.hash;
+        history.replaceState({}, document.title, newUrl);
+      }
+    }
+  })();
 <html>
   <head>
     <base target="_top">
