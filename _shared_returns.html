@@ -1,0 +1,98 @@
+<div id="tabReturns" class="tab-panel">
+  <div class="card">
+    <h2>Retouren behoeftemateriaal</h2>
+    <div class="muted">Retour van bus naar centraal magazijn of van centraal magazijn naar Fluvius.</div>
+
+    <div class="grid three" style="margin-top:16px;">
+      <div>
+        <label for="returnModeSelect">Retourtype</label>
+        <select id="returnModeSelect" onchange="onReturnModeChange()">
+          <option value="BUS_TO_CENTRAL">Van bus naar centraal magazijn</option>
+          <option value="CENTRAL_TO_FLUVIUS">Van centraal magazijn naar Fluvius</option>
+        </select>
+      </div>
+
+      <div id="returnTechWrap">
+        <label for="returnTechSelect">Technieker / bus</label>
+        <select id="returnTechSelect"></select>
+      </div>
+
+      <div>
+        <label for="returnDocumentDate">Documentdatum</label>
+        <input id="returnDocumentDate" type="date">
+      </div>
+
+      <div style="align-self:end;">
+        <button id="createReturnBtn" onclick="createReturnFlow()">Nieuwe retour aanmaken</button>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:16px;">
+      <table>
+        <thead>
+          <tr>
+            <th>RetourID</th>
+            <th>Herkomst</th>
+            <th>Documentdatum</th>
+            <th>Status</th>
+            <th class="right">Lijnen</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="returnsBody"></tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:20px;">
+      <h3>Geselecteerde retour</h3>
+      <div id="returnInfo" class="muted">Nog geen retour geselecteerd.</div>
+
+      <div class="grid two" style="margin-top:16px;">
+        <div>
+          <label for="returnCatalogSearch">Zoek artikel voor retour</label>
+          <input id="returnCatalogSearch" placeholder="Artikelcode / omschrijving">
+        </div>
+        <div style="align-self:end;">
+          <button class="btn-light" id="returnSearchBtn" onclick="searchCatalogForReturn()">Zoeken</button>
+        </div>
+      </div>
+
+      <div class="table-wrap" style="margin-top:12px;">
+        <table>
+          <thead>
+            <tr>
+              <th>ArtikelNr</th>
+              <th>Artikel</th>
+              <th>Eenheid</th>
+              <th class="right">Beschikbaar</th>
+              <th>Actie</th>
+            </tr>
+          </thead>
+          <tbody id="returnCatalogResultsBody"></tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap" style="margin-top:20px;">
+        <table>
+          <thead>
+            <tr>
+              <th>ArtikelNr</th>
+              <th>Artikel</th>
+              <th>Eenheid</th>
+              <th class="right">Beschikbaar</th>
+              <th class="right">Aantal</th>
+              <th>Reden</th>
+              <th>Opmerking</th>
+            </tr>
+          </thead>
+          <tbody id="returnLinesBody"></tbody>
+        </table>
+      </div>
+
+      <div class="toolbar">
+        <button class="btn-light" id="saveReturnBtn" onclick="saveReturnDetail()">Retourlijnen opslaan</button>
+        <button id="submitReturnBtn" onclick="submitReturnDetail()">Retour indienen</button>
+      </div>
+    </div>
+  </div>
+</div>

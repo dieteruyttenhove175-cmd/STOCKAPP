@@ -84,6 +84,36 @@ function buildOrderRows(technician, delivery, stockMap, selectedItems, opmerking
   });
 }
 
+function getWarehouseData(sessionId) {
+  const user = assertWarehouseAccess(sessionId);
+
+  const orders = getAllGrabbelOrders();
+  const upcomingGroups = buildDeliveryGroupsFromOrders(orders)
+    .filter(group => !!group.beleveringDatumIso)
+    .sort((a, b) => String(a.klaarTegenSort || '').localeCompare(String(b.klaarTegenSort || '')));
+
+  const stats = {
+    open: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.REQUESTED).length,
+    klaargezet: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.READY).length,
+    meegegeven: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.DISPATCHED).length,
+    nietAfgehaald: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.NOT_PICKED).length,
+    ontvangen: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.RECEIVED).length,
+    vandaag: upcomingGroups.filter(x => {
+      const vandaag = Utilities.formatDate(nowDate(), getAppTimeZone(), 'yyyy-MM-dd');
+      return String(x.beleveringDatumIso || '') === vandaag;
+    }).length
+  };
+
+  return {
+    user: {
+      naam: safeText(user.naam || ''),
+      rol: safeText(user.rol || '')
+    },
+    stats: stats,
+    upcomingGroups: upcomingGroups
+  };
+}
+
 function buildStockMapForOrdering() {
   const stockMap = {};
   readObjectsSafe(TABS.STOCK)

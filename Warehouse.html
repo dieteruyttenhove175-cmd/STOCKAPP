@@ -378,6 +378,7 @@
         </div>
       </div>
 
+      <!-- DELIVERIES -->
       <div id="tabDeliveries" class="tab-panel active">
         <div class="card">
           <h2>Beleveringsmomenten</h2>
@@ -430,6 +431,7 @@
         </div>
       </div>
 
+      <!-- RECEIPTS -->
       <div id="tabReceipts" class="tab-panel">
         <div class="card">
           <div class="section-title">
@@ -548,20 +550,31 @@
         </div>
       </div>
 
+      <!-- RETURNS -->
       <div id="tabReturns" class="tab-panel">
         <div class="card">
           <h2>Retouren behoeftemateriaal</h2>
-          <div class="muted">Retour enkel voor behoeftemateriaal. Deze gaan na goedkeuring uit de bus en terug naar centraal magazijn.</div>
+          <div class="muted">Retour van bus naar centraal magazijn of van centraal magazijn naar Fluvius.</div>
 
           <div class="grid three" style="margin-top:16px;">
             <div>
+              <label for="returnModeSelect">Retourtype</label>
+              <select id="returnModeSelect" onchange="onReturnModeChange()">
+                <option value="BUS_TO_CENTRAL">Van bus naar centraal magazijn</option>
+                <option value="CENTRAL_TO_FLUVIUS">Van centraal magazijn naar Fluvius</option>
+              </select>
+            </div>
+
+            <div id="returnTechWrap">
               <label for="returnTechSelect">Technieker / bus</label>
               <select id="returnTechSelect"></select>
             </div>
+
             <div>
               <label for="returnDocumentDate">Documentdatum</label>
               <input id="returnDocumentDate" type="date">
             </div>
+
             <div style="align-self:end;">
               <button id="createReturnBtn" onclick="createReturnFlow()">Nieuwe retour aanmaken</button>
             </div>
@@ -572,7 +585,7 @@
               <thead>
                 <tr>
                   <th>RetourID</th>
-                  <th>Technieker</th>
+                  <th>Herkomst</th>
                   <th>Documentdatum</th>
                   <th>Status</th>
                   <th class="right">Lijnen</th>
@@ -604,7 +617,7 @@
                     <th>ArtikelNr</th>
                     <th>Artikel</th>
                     <th>Eenheid</th>
-                    <th>Leverancier</th>
+                    <th class="right">Beschikbaar</th>
                     <th>Actie</th>
                   </tr>
                 </thead>
@@ -619,6 +632,7 @@
                     <th>ArtikelNr</th>
                     <th>Artikel</th>
                     <th>Eenheid</th>
+                    <th class="right">Beschikbaar</th>
                     <th class="right">Aantal</th>
                     <th>Reden</th>
                     <th>Opmerking</th>
@@ -636,6 +650,7 @@
         </div>
       </div>
 
+      <!-- NEED ISSUES -->
       <div id="tabNeedIssues" class="tab-panel">
         <div class="card">
           <div class="section-title">
@@ -741,6 +756,7 @@
         </div>
       </div>
 
+      <!-- CENTRAL -->
       <div id="tabCentral" class="tab-panel">
         <div class="card">
           <div class="section-title">
@@ -886,6 +902,7 @@
         </div>
       </div>
 
+      <!-- NOTIFICATIONS -->
       <div id="tabNotifications" class="tab-panel">
         <div class="card">
           <h2>Meldingen</h2>
@@ -925,7 +942,16 @@
 
       const PREP_REASONS = ['', 'Niet genoeg in stock', 'Teveel besteld', 'Andere reden'];
       const RECEIPT_REASONS = ['', 'Niet volledig geleverd', 'Beschadigd ontvangen', 'Verkeerd artikel / verpakking', 'Extra geleverd', 'Andere reden'];
-      const RETURN_REASONS = ['Teveel besteld', 'NPC / beschadigde artikelen', 'Andere reden'];
+
+      function getSelectedReturnMode() {
+        return document.getElementById('returnModeSelect')?.value || 'BUS_TO_CENTRAL';
+      }
+
+      function getReturnReasonOptions(returnMode) {
+        return returnMode === 'CENTRAL_TO_FLUVIUS'
+          ? ['Te veel geleverd', 'NPC / beschadigde artikelen', 'Andere reden']
+          : ['NPC / beschadigde artikelen', 'Andere reden'];
+      }
 
       function touchUserInteraction() {
         lastUserInteractionAt = Date.now();
@@ -1818,6 +1844,30 @@
         }
       }
 
+      function onReturnModeChange() {
+        const returnMode = getSelectedReturnMode();
+        const techWrap = document.getElementById('returnTechWrap');
+        const info = document.getElementById('returnInfo');
+
+        if (techWrap) {
+          techWrap.style.display = returnMode === 'BUS_TO_CENTRAL' ? '' : 'none';
+        }
+
+        if (!selectedReturnId && info) {
+          info.textContent =
+            returnMode === 'BUS_TO_CENTRAL'
+              ? 'Nieuwe retour van bus naar centraal magazijn.'
+              : 'Nieuwe retour van centraal magazijn naar Fluvius.';
+        }
+
+        const catalogBody = document.getElementById('returnCatalogResultsBody');
+        const linesBody = document.getElementById('returnLinesBody');
+        if (catalogBody) catalogBody.innerHTML = '';
+        if (!selectedReturnId && linesBody) {
+          linesBody.innerHTML = `<tr><td colspan="7" class="muted">Geen lijnen.</td></tr>`;
+        }
+      }
+
       function renderReturnsSection(data, skipDetailRefresh) {
         returnsData = data;
         renderReturnTechnicians(data.technicians || []);
@@ -1860,7 +1910,7 @@
         body.innerHTML = returns.map(retour => `
           <tr class="${retour.retourId === selectedReturnId ? 'selected-row' : ''}">
             <td>${retour.retourId}</td>
-            <td>${retour.techniekerNaam || retour.techniekerCode || ''}</td>
+            <td>${retour.returnMode === 'CENTRAL_TO_FLUVIUS' ? 'Centraal magazijn' : (retour.techniekerNaam || retour.techniekerCode || '')}</td>
             <td>${retour.documentDatum || ''}</td>
             <td><span class="status-badge ${statusClass(retour.status)}">${retour.status}</span></td>
             <td class="right">${retour.lineCount || 0}</td>
@@ -1883,10 +1933,13 @@
       }
 
       async function executeCreateReturnFlow() {
-        const techniekerCode = document.getElementById('returnTechSelect').value || '';
+        const returnMode = getSelectedReturnMode();
+        const techniekerCode = returnMode === 'BUS_TO_CENTRAL'
+          ? (document.getElementById('returnTechSelect').value || '')
+          : '';
         const documentDatum = document.getElementById('returnDocumentDate').value || '';
 
-        if (!techniekerCode) {
+        if (returnMode === 'BUS_TO_CENTRAL' && !techniekerCode) {
           showError('Kies eerst een technieker / bus.');
           return;
         }
@@ -1902,7 +1955,8 @@
           method: 'createReturn',
           payload: withSession({
             techniekerCode,
-            documentDatum
+            documentDatum,
+            returnMode
           }),
           fallbackErrorMessage: 'Fout bij aanmaken retour.',
           onSuccess: result => {
@@ -1910,6 +1964,7 @@
             selectedReturnId = result.retourId;
             localStorage.setItem('warehouse_selected_return_id', selectedReturnId);
             loadAll(false);
+            switchTab('returns');
           }
         });
       }
@@ -1923,30 +1978,38 @@
           selectedReturnId = null;
           localStorage.removeItem('warehouse_selected_return_id');
           info.textContent = 'Nog geen retour geselecteerd.';
-          body.innerHTML = `<tr><td colspan="6" class="muted">Geen lijnen.</td></tr>`;
+          body.innerHTML = `<tr><td colspan="7" class="muted">Geen lijnen.</td></tr>`;
           document.getElementById('returnCatalogResultsBody').innerHTML = '';
           return;
         }
 
+        const returnMode = retour.returnMode || 'BUS_TO_CENTRAL';
+        const isLocked = retour.status === 'Ingediend' || retour.status === 'Goedgekeurd';
+        const reasons = getReturnReasonOptions(returnMode);
+
+        const modeLabel = returnMode === 'CENTRAL_TO_FLUVIUS'
+          ? 'Centraal magazijn → Fluvius'
+          : 'Bus → Centraal magazijn';
+
         info.innerHTML = `
           <span class="pill">${retour.retourId}</span>
-          <span class="pill">${retour.techniekerNaam || retour.techniekerCode || ''}</span>
+          <span class="pill">${modeLabel}</span>
+          <span class="pill">${retour.techniekerNaam || retour.techniekerCode || (returnMode === 'CENTRAL_TO_FLUVIUS' ? 'Centraal magazijn' : '')}</span>
           <span class="pill">${retour.documentDatum || ''}</span>
           <span class="pill">${retour.status}</span>
         `;
-
-        const isLocked = retour.status === 'Ingediend' || retour.status === 'Goedgekeurd';
 
         body.innerHTML = (retour.lines || []).map((line, idx) => `
           <tr>
             <td>${line.artikelCode}</td>
             <td>${line.artikelOmschrijving}</td>
             <td>${line.eenheid}</td>
+            <td class="right">${Number(line.beschikbaarAantal || 0)}</td>
             <td class="right"><input type="number" min="1" step="1" value="${line.aantal}" data-return-field="qty" data-return-row="${idx}" ${isLocked ? 'disabled' : ''}></td>
-            <td><select data-return-field="reason" data-return-row="${idx}" ${isLocked ? 'disabled' : ''}>${RETURN_REASONS.map(r => `<option value="${r}" ${line.reden === r ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+            <td><select data-return-field="reason" data-return-row="${idx}" ${isLocked ? 'disabled' : ''}>${reasons.map(r => `<option value="${r}" ${line.reden === r ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
             <td><textarea data-return-field="note" data-return-row="${idx}" ${isLocked ? 'disabled' : ''}>${line.opmerking || ''}</textarea></td>
           </tr>
-        `).join('') || `<tr><td colspan="6" class="muted">Geen lijnen.</td></tr>`;
+        `).join('') || `<tr><td colspan="7" class="muted">Geen lijnen.</td></tr>`;
       }
 
       async function searchCatalogForReturn() {
@@ -1956,6 +2019,10 @@
           return;
         }
         if (!ensureSession()) return;
+        if (!selectedReturnId) {
+          showError('Selecteer eerst een retour.');
+          return;
+        }
 
         showBusy('Catalogus zoeken...');
         try {
@@ -1963,7 +2030,10 @@
             google.script.run
               .withSuccessHandler(resolve)
               .withFailureHandler(reject)
-              .searchSupplierCatalog(query, SESSION_ID);
+              .searchReturnCatalog(withSession({
+                retourId: selectedReturnId,
+                query: query
+              }));
           });
 
           hideBusy();
@@ -1978,8 +2048,8 @@
               <td>${item.artikelCode}</td>
               <td>${item.artikelOmschrijving}</td>
               <td>${item.eenheid}</td>
-              <td>${item.leverancier}</td>
-              <td><button class="btn-light" onclick="addCatalogItemToReturn('${escapeJs(item.artikelCode)}', '${escapeJs(item.artikelOmschrijving)}', '${escapeJs(item.eenheid)}')">Toevoegen</button></td>
+              <td class="right">${Number(item.beschikbaarAantal || 0)}</td>
+              <td><button class="btn-light" onclick="addCatalogItemToReturn('${escapeJs(item.artikelCode)}', '${escapeJs(item.artikelOmschrijving)}', '${escapeJs(item.eenheid)}', ${Number(item.beschikbaarAantal || 0)})">Toevoegen</button></td>
             </tr>
           `).join('');
         } catch (err) {
@@ -1988,7 +2058,7 @@
         }
       }
 
-      function addCatalogItemToReturn(code, omschrijving, eenheid) {
+      function addCatalogItemToReturn(code, omschrijving, eenheid, beschikbaarAantal) {
         const retour = ((returnsData && returnsData.returns) || []).find(r => r.retourId === selectedReturnId);
         if (!retour) {
           showError('Selecteer eerst een retour.');
@@ -2003,14 +2073,20 @@
           return;
         }
 
+        const returnMode = retour.returnMode || 'BUS_TO_CENTRAL';
+        const defaultReason = returnMode === 'CENTRAL_TO_FLUVIUS'
+          ? 'Te veel geleverd'
+          : 'NPC / beschadigde artikelen';
+
         retour.lines.push({
           retourId: retour.retourId,
           artikelCode: code,
           artikelOmschrijving: omschrijving,
           eenheid,
           aantal: 1,
-          reden: 'Teveel besteld',
+          reden: defaultReason,
           opmerking: '',
+          beschikbaarAantal: Number(beschikbaarAantal || 0),
           actief: true
         });
 
@@ -2028,18 +2104,28 @@
           eenheid: line.eenheid,
           aantal: Number(document.querySelector(`[data-return-field="qty"][data-return-row="${idx}"]`).value || 0),
           reden: document.querySelector(`[data-return-field="reason"][data-return-row="${idx}"]`).value || '',
-          opmerking: document.querySelector(`[data-return-field="note"][data-return-row="${idx}"]`).value || ''
+          opmerking: document.querySelector(`[data-return-field="note"][data-return-row="${idx}"]`).value || '',
+          beschikbaarAantal: Number(line.beschikbaarAantal || 0)
         }));
       }
 
-      function validateReturnLines(lines) {
+      function validateReturnLines(lines, retour) {
         if (!lines.length) return 'Voeg minstens 1 retourlijn toe.';
+
+        const allowedReasons = getReturnReasonOptions(retour.returnMode || 'BUS_TO_CENTRAL');
 
         for (const line of lines) {
           if (line.aantal <= 0) return `Aantal moet groter zijn dan 0 voor artikel ${line.artikelCode}.`;
           if (!line.reden) return `Kies een reden voor artikel ${line.artikelCode}.`;
+          if (!allowedReasons.includes(line.reden)) return `Ongeldige reden voor artikel ${line.artikelCode}.`;
           if (line.reden === 'Andere reden' && !String(line.opmerking || '').trim()) {
             return `Opmerking is verplicht bij 'Andere reden' voor artikel ${line.artikelCode}.`;
+          }
+          if (Number(line.beschikbaarAantal || 0) <= 0) {
+            return `Artikel ${line.artikelCode} is niet beschikbaar voor retour.`;
+          }
+          if (Number(line.aantal || 0) > Number(line.beschikbaarAantal || 0)) {
+            return `Retouraantal is groter dan beschikbaar voor artikel ${line.artikelCode}.`;
           }
         }
         return '';
@@ -2055,8 +2141,9 @@
           return;
         }
 
+        const retour = ((returnsData && returnsData.returns) || []).find(r => r.retourId === selectedReturnId);
         const lines = collectReturnLines();
-        const validation = validateReturnLines(lines);
+        const validation = validateReturnLines(lines, retour);
         if (validation) {
           showError(validation);
           return;
@@ -2089,8 +2176,9 @@
           return;
         }
 
+        const retour = ((returnsData && returnsData.returns) || []).find(r => r.retourId === selectedReturnId);
         const lines = collectReturnLines();
-        const validation = validateReturnLines(lines);
+        const validation = validateReturnLines(lines, retour);
         if (validation) {
           showError(validation);
           return;
@@ -2702,7 +2790,7 @@
               type: 'Retour',
               status: x.status || '',
               titel: x.retourId,
-              bericht: `Open retour ${x.retourId} voor ${x.techniekerNaam || x.techniekerCode || ''}.`
+              bericht: `Open retour ${x.retourId} voor ${x.returnMode === 'CENTRAL_TO_FLUVIUS' ? 'centraal magazijn' : (x.techniekerNaam || x.techniekerCode || '')}.`
             });
           });
 
@@ -2742,6 +2830,7 @@
         document.addEventListener('change', touchUserInteraction, true);
         document.addEventListener('click', touchUserInteraction, true);
 
+        onReturnModeChange();
         loadAll(true);
       }
 

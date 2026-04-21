@@ -1,0 +1,321 @@
+<script>
+  function renderNeedIssuesSection(data) {
+    APP_STATE.needIssueData = data || {};
+    renderNeedIssueTechnicians((APP_STATE.needIssueData.technicians) || []);
+    renderNeedIssueList((APP_STATE.needIssueData.issues) || []);
+
+    if (APP_STATE.selectedNeedIssueId) {
+      const issue = ((APP_STATE.needIssueData.issues) || []).find(r => r.uitgifteId === APP_STATE.selectedNeedIssueId);
+      renderNeedIssueDetail(issue || null);
+    }
+  }
+
+  function renderNeedIssueTechnicians(technicians) {
+    const select = document.getElementById('needIssueTech');
+    if (!select) return;
+
+    select.innerHTML = technicians.length
+      ? technicians.map(t => `<option value="${t.code}">${t.naam} (${t.code})</option>`).join('')
+      : '<option value="">Geen techniekers</option>';
+  }
+
+  function renderNeedIssueList(issues) {
+    const body = document.getElementById('needIssuesBody');
+    if (!body) return;
+
+    if (!issues.length) {
+      body.innerHTML = `<tr><td colspan="7" class="muted">Nog geen behoefte-uitgiftes.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = issues.map(issue => `
+      <tr class="${issue.uitgifteId === APP_STATE.selectedNeedIssueId ? 'selected-row' : ''}">
+        <td>${issue.uitgifteId}</td>
+        <td>${issue.techniekerNaam || ''}</td>
+        <td>${issue.documentDatum || ''}</td>
+        <td><span class="status-badge">${issue.status || ''}</span></td>
+        <td>${issue.reden || ''}</td>
+        <td class="right">${issue.lineCount || 0}</td>
+        <td><button class="btn-light" onclick="selectNeedIssue('${issue.uitgifteId}')">Open</button></td>
+      </tr>
+    `).join('');
+  }
+
+  function selectNeedIssue(uitgifteId) {
+    APP_STATE.selectedNeedIssueId = uitgifteId;
+    const issue = ((APP_STATE.needIssueData && APP_STATE.needIssueData.issues) || []).find(r => r.uitgifteId === uitgifteId);
+    renderNeedIssueList((APP_STATE.needIssueData && APP_STATE.needIssueData.issues) || []);
+    renderNeedIssueDetail(issue || null);
+    switchTab('needissues');
+  }
+
+  function renderNeedIssueDetail(issue) {
+    const info = document.getElementById('needIssueInfo');
+    const body = document.getElementById('needIssueLinesBody');
+    if (!info || !body) return;
+
+    if (!issue) {
+      info.textContent = 'Nog geen actieve behoefte-uitgifte geselecteerd.';
+      body.innerHTML = `<tr><td colspan="4" class="muted">Geen actieve lijnen.</td></tr>`;
+      return;
+    }
+
+    info.innerHTML = `
+      <span class="pill">${issue.uitgifteId}</span>
+      <span class="pill">${issue.techniekerNaam || ''}</span>
+      <span class="pill">${issue.documentDatum || ''}</span>
+      <span class="pill">${issue.status || ''}</span>
+      <span class="pill">${issue.reden || ''}</span>
+    `;
+
+    body.innerHTML = (issue.lines || []).map((line, idx) => `
+      <tr>
+        <td>${line.artikelCode || ''}</td>
+        <td>${line.artikelOmschrijving || ''}</td>
+        <td>${line.eenheid || ''}</td>
+        <td class="right"><input type="number" min="1" step="1" value="${line.aantal || 1}" data-need-field="qty" data-need-row="${idx}"></td>
+      </tr>
+    `).join('') || `<tr><td colspan="4" class="muted">Geen lijnen.</td></tr>`;
+  }
+
+  function createNeedIssueFlow() {
+    openConfirm('Nieuwe behoefte-uitgifte aanmaken?', executeCreateNeedIssueFlow);
+  }
+
+  async function executeCreateNeedIssueFlow() {
+    const techniekerCode = document.getElementById('needIssueTech')?.value || '';
+    const documentDatum = document.getElementById('needIssueDate')?.value || '';
+    const reden = document.getElementById('needIssueReason')?.value || '';
+
+    if (!techniekerCode) {
+      showError('Kies eerst een technieker / bus.');
+      return;
+    }
+
+    if (!documentDatum) {
+      showError('Documentdatum is verplicht.');
+      return;
+    }
+
+    if (!reden.trim()) {
+      showError('Reden is verplicht.');
+      return;
+    }
+
+    await runAction({
+      buttonId: 'createNeedIssueBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Behoefte-uitgifte aanmaken...',
+      method: 'createNeedIssue',
+      payload: withSession({
+        techniekerCode,
+        documentDatum,
+        reden,
+        opmerking: document.getElementById('needIssueNote')?.value || ''
+      }),
+      fallbackErrorMessage: 'Fout bij aanmaken behoefte-uitgifte.',
+      onSuccess: result => {
+        APP_STATE.selectedNeedIssueId = result.uitgifteId;
+        showSuccess(result.message);
+      }
+    });
+  }
+
+  async function refreshAutoNeedProposals() {
+    await runAction({
+      buttonId: 'refreshAutoNeedBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Automatische voorstellen laden...',
+      method: 'getAutoNeedProposals',
+      payload: withSession({}),
+      fallbackErrorMessage: 'Fout bij laden automatische voorstellen.',
+      onSuccess: renderAutoNeedProposals
+    });
+  }
+
+  function renderAutoNeedProposals(data) {
+    const body = document.getElementById('autoNeedProposalBody');
+    if (!body) return;
+
+    const rows = (data && data.proposals) || [];
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="8" class="muted">Nog geen automatische voorstellen.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map((row, idx) => `
+      <tr>
+        <td>${row.techniekerNaam || row.techniekerCode || ''}</td>
+        <td>${row.deliveryLabel || ''}</td>
+        <td>${row.artikelCode || ''} - ${row.artikelOmschrijving || ''}</td>
+        <td class="right">${row.previousSnapshot || 0}</td>
+        <td class="right">${row.currentSnapshot || 0}</td>
+        <td class="right">${row.verbruikDelta || 0}</td>
+        <td class="right">${row.voorstelAantal || 0}</td>
+        <td><button class="btn-light" onclick="createNeedIssueFromProposal(${idx})">Maak uitgifte</button></td>
+      </tr>
+    `).join('');
+
+    APP_STATE.autoNeedProposals = rows;
+  }
+
+  async function createNeedIssueFromProposal(idx) {
+    const proposal = (APP_STATE.autoNeedProposals || [])[idx];
+    if (!proposal) {
+      showError('Voorstel niet gevonden.');
+      return;
+    }
+
+    await runAction({
+      busyMessage: 'Behoeftevoorstel omzetten...',
+      method: 'createNeedIssueFromProposal',
+      payload: withSession({ proposal }),
+      fallbackErrorMessage: 'Fout bij omzetten van voorstel.',
+      onSuccess: result => {
+        APP_STATE.selectedNeedIssueId = result.uitgifteId;
+        showSuccess(result.message);
+      }
+    });
+  }
+
+  async function searchCatalogForNeedIssue() {
+    const query = (document.getElementById('needIssueCatalogSearch')?.value || '').trim();
+    if (!query) {
+      showError('Geef eerst een artikelcode of zoekterm in.');
+      return;
+    }
+
+    showBusy('Catalogus zoeken...');
+    try {
+      const results = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .searchSupplierCatalog(query, window.SESSION_ID);
+      });
+
+      hideBusy();
+
+      const body = document.getElementById('needIssueCatalogResultsBody');
+      if (!body) return;
+
+      if (!results || !results.length) {
+        body.innerHTML = `<tr><td colspan="5" class="muted">Geen resultaten.</td></tr>`;
+        return;
+      }
+
+      body.innerHTML = results.map(item => `
+        <tr>
+          <td>${item.artikelCode}</td>
+          <td>${item.artikelOmschrijving}</td>
+          <td>${item.eenheid}</td>
+          <td>${item.leverancier}</td>
+          <td><button class="btn-light" onclick="addCatalogItemToNeedIssue('${escapeJs(item.artikelCode)}','${escapeJs(item.artikelOmschrijving)}','${escapeJs(item.eenheid)}')">Toevoegen</button></td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      hideBusy();
+      showError(extractErrorMessage(err, 'Fout bij zoeken.'), true);
+    }
+  }
+
+  function addCatalogItemToNeedIssue(code, omschrijving, eenheid) {
+    const issue = ((APP_STATE.needIssueData && APP_STATE.needIssueData.issues) || []).find(r => r.uitgifteId === APP_STATE.selectedNeedIssueId);
+    if (!issue) {
+      showError('Selecteer eerst een behoefte-uitgifte.');
+      return;
+    }
+
+    issue.lines = issue.lines || [];
+    if (issue.lines.some(x => x.artikelCode === code)) {
+      showError('Dit artikel zit al in de behoefte-uitgifte.');
+      return;
+    }
+
+    issue.lines.push({
+      artikelCode: code,
+      artikelOmschrijving: omschrijving,
+      eenheid,
+      aantal: 1
+    });
+
+    renderNeedIssueDetail(issue);
+  }
+
+  function collectNeedIssueLines() {
+    const issue = ((APP_STATE.needIssueData && APP_STATE.needIssueData.issues) || []).find(r => r.uitgifteId === APP_STATE.selectedNeedIssueId);
+    if (!issue) return [];
+
+    return (issue.lines || []).map((line, idx) => ({
+      artikelCode: line.artikelCode,
+      artikelOmschrijving: line.artikelOmschrijving,
+      eenheid: line.eenheid,
+      aantal: Number(document.querySelector(`[data-need-field="qty"][data-need-row="${idx}"]`)?.value || 0)
+    }));
+  }
+
+  function validateNeedIssueLines(lines) {
+    if (!lines.length) return 'Voeg minstens 1 lijn toe aan de behoefte-uitgifte.';
+    for (const line of lines) {
+      if (line.aantal <= 0) return `Aantal moet groter zijn dan 0 voor artikel ${line.artikelCode}.`;
+    }
+    return '';
+  }
+
+  function saveNeedIssueDetail() {
+    openConfirm('Uitgiftelijnen opslaan?', executeSaveNeedIssueDetail);
+  }
+
+  async function executeSaveNeedIssueDetail() {
+    const lines = collectNeedIssueLines();
+    const validation = validateNeedIssueLines(lines);
+    if (validation) {
+      showError(validation);
+      return;
+    }
+
+    await runAction({
+      buttonId: 'saveNeedIssueBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Uitgiftelijnen opslaan...',
+      method: 'saveNeedIssueLines',
+      payload: withSession({
+        uitgifteId: APP_STATE.selectedNeedIssueId,
+        lines
+      }),
+      fallbackErrorMessage: 'Fout bij opslaan uitgiftelijnen.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+
+  function bookNeedIssueDetail() {
+    openConfirm('Behoefte-uitgifte boeken?', executeBookNeedIssueDetail);
+  }
+
+  async function executeBookNeedIssueDetail() {
+    const lines = collectNeedIssueLines();
+    const validation = validateNeedIssueLines(lines);
+    if (validation) {
+      showError(validation);
+      return;
+    }
+
+    await serverCall('saveNeedIssueLines', withSession({
+      uitgifteId: APP_STATE.selectedNeedIssueId,
+      lines
+    }));
+
+    await runAction({
+      buttonId: 'bookNeedIssueBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Behoefte-uitgifte boeken...',
+      method: 'bookNeedIssue',
+      payload: withSession({
+        uitgifteId: APP_STATE.selectedNeedIssueId,
+        actor: document.getElementById('actorInput')?.value || 'Gebruiker'
+      }),
+      fallbackErrorMessage: 'Fout bij boeken behoefte-uitgifte.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+</script>

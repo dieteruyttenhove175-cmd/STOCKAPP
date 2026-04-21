@@ -1,0 +1,133 @@
+<div id="tabNeedIssues" class="tab-panel">
+  <div class="card">
+    <div class="section-title">
+      <h2>Nieuwe behoefte-uitgifte</h2>
+      <div class="muted">Boekt behoeftemateriaal van centraal magazijn naar bus.</div>
+    </div>
+
+    <div class="grid three" style="margin-top:12px;">
+      <div>
+        <label for="needIssueTech">Technieker / bus</label>
+        <select id="needIssueTech"></select>
+      </div>
+      <div>
+        <label for="needIssueDate">Documentdatum</label>
+        <input id="needIssueDate" type="date">
+      </div>
+      <div>
+        <label for="needIssueReason">Reden</label>
+        <input id="needIssueReason" placeholder="Bijv. Projectlevering / aanvulling">
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <label for="needIssueNote">Opmerking</label>
+      <textarea id="needIssueNote"></textarea>
+    </div>
+
+    <div style="margin-top:16px;">
+      <button id="createNeedIssueBtn" onclick="createNeedIssueFlow()">Nieuwe behoefte-uitgifte aanmaken</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Automatische behoeftevoorstellen</h2>
+      <div class="muted">Voorstellen op basis van verbruiksdelta per beleveringsmoment.</div>
+    </div>
+
+    <div class="toolbar">
+      <button id="refreshAutoNeedBtn" class="btn-light" onclick="refreshAutoNeedProposals()">Voorstellen vernieuwen</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Technieker</th>
+            <th>Beleveringsmoment</th>
+            <th>Artikel</th>
+            <th class="right">Vorige snapshot</th>
+            <th class="right">Huidige snapshot</th>
+            <th class="right">Delta</th>
+            <th class="right">Voorstel</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="autoNeedProposalBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Overzicht behoefte-uitgiftes</h2>
+      <div class="muted">Open een uitgifte om lijnen toe te voegen en te boeken.</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>UitgifteID</th>
+            <th>Technieker</th>
+            <th>Documentdatum</th>
+            <th>Status</th>
+            <th>Reden</th>
+            <th class="right">Lijnen</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="needIssuesBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Geselecteerde behoefte-uitgifte</h2>
+    <div id="needIssueInfo" class="muted">Nog geen actieve behoefte-uitgifte geselecteerd.</div>
+
+    <div class="grid two" style="margin-top:16px;">
+      <div>
+        <label for="needIssueCatalogSearch">Zoek behoeftemateriaal</label>
+        <input id="needIssueCatalogSearch" placeholder="Artikelcode / omschrijving / leverancier">
+      </div>
+      <div style="align-self:end;">
+        <button class="btn-light" id="needIssueSearchBtn" onclick="searchCatalogForNeedIssue()">Zoeken</button>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th>Leverancier</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="needIssueCatalogResultsBody"></tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap" style="margin-top:20px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th class="right">Aantal</th>
+          </tr>
+        </thead>
+        <tbody id="needIssueLinesBody"></tbody>
+      </table>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn-light" id="saveNeedIssueBtn" onclick="saveNeedIssueDetail()">Uitgiftelijnen opslaan</button>
+      <button id="bookNeedIssueBtn" onclick="bookNeedIssueDetail()">Behoefte-uitgifte boeken</button>
+    </div>
+  </div>
+</div>

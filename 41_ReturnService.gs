@@ -1,5 +1,11 @@
 /* =========================================================
    41_ReturnService.gs — retouren
+   Volledig herschreven:
+   - bus -> centraal magazijn
+   - centraal magazijn -> Fluvius
+   - beschikbaar aantal op read
+   - zoekfunctie per retourtype
+   - extra validatie op save en approval
    ========================================================= */
 
 function makeReturnId() {
@@ -46,6 +52,45 @@ function getReturnMode(retour) {
   return isBusReturnDocument(retour) ? 'BUS_TO_CENTRAL' : 'CENTRAL_TO_FLUVIUS';
 }
 
+function normalizeReturnReason_(reason) {
+  const value = safeText(reason);
+
+  if (value === 'NCP') return 'NPC / beschadigde artikelen';
+  if (value === 'NPC') return 'NPC / beschadigde artikelen';
+
+  return value;
+}
+
+function matchesReturnCatalogQuery_(query, artikelCode, artikelOmschrijving) {
+  const q = safeText(query).toLowerCase();
+  if (!q) return true;
+
+  return (
+    safeText(artikelCode).toLowerCase().includes(q) ||
+    safeText(artikelOmschrijving).toLowerCase().includes(q)
+  );
+}
+
+function getAvailableReturnQty_(retour, artikelCode) {
+  const code = safeText(artikelCode);
+  if (!code) return 0;
+
+  if (isBusReturnDocument(retour)) {
+    const busStockMap = getBusStockMapForTechnician(retour.techniekerCode);
+    return busStockMap[code] ? safeNumber(busStockMap[code].voorraadBus, 0) : 0;
+  }
+
+  const centralMap = buildCentralWarehouseMap();
+  return centralMap[code] ? safeNumber(centralMap[code].voorraadCentraal, 0) : 0;
+}
+
+function addAvailabilityToReturnLines_(retour, lines) {
+  return (lines || []).map(line => ({
+    ...line,
+    beschikbaarAantal: getAvailableReturnQty_(retour, line.artikelCode)
+  }));
+}
+
 function buildReturnsWithLines(returns, lines) {
   const linesByReturn = {};
 
@@ -57,12 +102,16 @@ function buildReturnsWithLines(returns, lines) {
     linesByReturn[id].push(line);
   });
 
-  return (returns || []).map(retour => ({
-    ...retour,
-    returnMode: getReturnMode(retour),
-    lines: linesByReturn[retour.retourId] || [],
-    lineCount: (linesByReturn[retour.retourId] || []).length
-  }));
+  return (returns || []).map(retour => {
+    const currentLines = addAvailabilityToReturnLines_(retour, linesByReturn[retour.retourId] || []);
+
+    return {
+      ...retour,
+      returnMode: getReturnMode(retour),
+      lines: currentLines,
+      lineCount: currentLines.length
+    };
+  });
 }
 
 function getReturnsData(sessionId) {
@@ -145,7 +194,7 @@ function buildReturnLineObject(retourId, line) {
     ArtikelOmschrijving: safeText(line.artikelOmschrijving) || safeText(article && article.artikelOmschrijving),
     Eenheid: safeText(line.eenheid) || safeText(article && article.eenheid),
     Aantal: safeNumber(line.aantal, 0),
-    Reden: safeText(line.reden),
+    Reden: normalizeReturnReason_(line.reden),
     Opmerking: safeText(line.opmerking),
     Actief: 'Ja'
   };
@@ -214,24 +263,9 @@ function createReturn(payload) {
   const user = requireLoggedInUser(sessionId);
 
   const documentDatum = safeText(payload.documentDatum);
+  const requestedMode = safeText(payload.returnMode || payload.retourType || 'BUS_TO_CENTRAL');
+
   if (!documentDatum) throw new Error('Documentdatum is verplicht.');
-
-  let techniekerCode = safeText(payload.techniekerCode);
-  let techniekerNaam = '';
-
-  if (user.rol === ROLE.TECHNICIAN) {
-    techniekerCode = safeText(user.techniekerCode);
-    if (!techniekerCode) {
-      throw new Error('Techniekerkoppeling ontbreekt op gebruiker.');
-    }
-    techniekerNaam = getTechnicianNameByCode(techniekerCode);
-  } else {
-    if (techniekerCode) {
-      techniekerNaam = getTechnicianNameByCode(techniekerCode);
-    }
-  }
-
-  const isCentralToFluvius = !techniekerCode;
 
   if (
     !roleAllowed(user, [
@@ -244,7 +278,28 @@ function createReturn(payload) {
     throw new Error('Geen rechten om een retour aan te maken.');
   }
 
-  if (isCentralToFluvius && user.rol === ROLE.TECHNICIAN) {
+  let techniekerCode = '';
+  let techniekerNaam = '';
+  let returnMode = requestedMode === 'CENTRAL_TO_FLUVIUS' ? 'CENTRAL_TO_FLUVIUS' : 'BUS_TO_CENTRAL';
+
+  if (user.rol === ROLE.TECHNICIAN) {
+    returnMode = 'BUS_TO_CENTRAL';
+    techniekerCode = safeText(user.techniekerCode);
+
+    if (!techniekerCode) {
+      throw new Error('Techniekerkoppeling ontbreekt op gebruiker.');
+    }
+
+    techniekerNaam = getTechnicianNameByCode(techniekerCode);
+  } else if (returnMode === 'BUS_TO_CENTRAL') {
+    techniekerCode = safeText(payload.techniekerCode);
+    if (!techniekerCode) {
+      throw new Error('Technieker / bus is verplicht voor busretour.');
+    }
+    techniekerNaam = getTechnicianNameByCode(techniekerCode);
+  }
+
+  if (returnMode === 'CENTRAL_TO_FLUVIUS' && user.rol === ROLE.TECHNICIAN) {
     throw new Error('Techniekers kunnen geen centrale retour naar Fluvius aanmaken.');
   }
 
@@ -263,10 +318,9 @@ function createReturn(payload) {
     GoedgekeurdDoor: '',
     GoedgekeurdOp: '',
     ManagerOpmerking: '',
-
-    RetourFlow: isCentralToFluvius ? 'CENTRAL_TO_FLUVIUS' : 'BUS_TO_CENTRAL',
-    LocatieVan: isCentralToFluvius ? LOCATION.CENTRAL : getBusLocationCode(techniekerCode),
-    LocatieNaar: isCentralToFluvius ? 'Fluvius' : LOCATION.CENTRAL,
+    RetourFlow: returnMode,
+    LocatieVan: returnMode === 'CENTRAL_TO_FLUVIUS' ? LOCATION.CENTRAL : getBusLocationCode(techniekerCode),
+    LocatieNaar: returnMode === 'CENTRAL_TO_FLUVIUS' ? 'Fluvius' : LOCATION.CENTRAL,
     InitiatiefRol: user.rol
   }]);
 
@@ -277,7 +331,7 @@ function createReturn(payload) {
     'Retour',
     retourId,
     {
-      returnMode: isCentralToFluvius ? 'CENTRAL_TO_FLUVIUS' : 'BUS_TO_CENTRAL',
+      returnMode: returnMode,
       techniekerCode: techniekerCode,
       techniekerNaam: techniekerNaam,
       documentDatum: documentDatum
@@ -286,9 +340,78 @@ function createReturn(payload) {
 
   return {
     success: true,
-    retourId,
+    retourId: retourId,
     message: 'Retour aangemaakt.'
   };
+}
+
+function searchBusReturnCatalog_(techniekerCode, query) {
+  const busStockMap = getBusStockMapForTechnician(techniekerCode);
+  const codes = Object.keys(busStockMap || {});
+
+  return codes
+    .map(code => {
+      const row = busStockMap[code] || {};
+      const article = getArticleMaster(code) || {};
+
+      return {
+        artikelCode: code,
+        artikelOmschrijving: safeText(row.artikelOmschrijving || article.artikelOmschrijving),
+        eenheid: safeText(row.eenheid || article.eenheid),
+        beschikbaarAantal: safeNumber(row.voorraadBus, 0)
+      };
+    })
+    .filter(item =>
+      item.beschikbaarAantal > 0 &&
+      matchesReturnCatalogQuery_(query, item.artikelCode, item.artikelOmschrijving)
+    )
+    .sort((a, b) => safeText(a.artikelCode).localeCompare(safeText(b.artikelCode)));
+}
+
+function searchCentralReturnCatalog_(query) {
+  const centralMap = buildCentralWarehouseMap();
+  const codes = Object.keys(centralMap || {});
+
+  return codes
+    .map(code => {
+      const row = centralMap[code] || {};
+      const article = getArticleMaster(code) || {};
+
+      return {
+        artikelCode: code,
+        artikelOmschrijving: safeText(row.artikelOmschrijving || article.artikelOmschrijving),
+        eenheid: safeText(row.eenheid || article.eenheid),
+        beschikbaarAantal: safeNumber(row.voorraadCentraal, 0)
+      };
+    })
+    .filter(item =>
+      item.beschikbaarAantal > 0 &&
+      matchesReturnCatalogQuery_(query, item.artikelCode, item.artikelOmschrijving)
+    )
+    .sort((a, b) => safeText(a.artikelCode).localeCompare(safeText(b.artikelCode)));
+}
+
+function searchReturnCatalog(payload) {
+  if (!payload) throw new Error('Geen payload ontvangen.');
+
+  const sessionId = getPayloadSessionId(payload);
+  const user = requireLoggedInUser(sessionId);
+
+  const retourId = safeText(payload.retourId);
+  const query = safeText(payload.query);
+
+  if (!retourId) throw new Error('RetourID ontbreekt.');
+
+  const retour = getReturnById(retourId);
+  if (!retour) throw new Error('Retour niet gevonden.');
+
+  assertReturnEditAccess(retour, user);
+
+  if (isBusReturnDocument(retour)) {
+    return searchBusReturnCatalog_(retour.techniekerCode, query);
+  }
+
+  return searchCentralReturnCatalog_(query);
 }
 
 function validateReturnLinesForContext(retour, cleanedLines, user) {
@@ -301,7 +424,7 @@ function validateReturnLinesForContext(retour, cleanedLines, user) {
   cleanedLines.forEach(line => {
     const artikelCode = safeText(line.artikelCode);
     const aantal = safeNumber(line.aantal, 0);
-    const reden = safeText(line.reden);
+    const reden = normalizeReturnReason_(line.reden);
     const opmerking = safeText(line.opmerking);
 
     if (!artikelCode) {
@@ -320,10 +443,23 @@ function validateReturnLinesForContext(retour, cleanedLines, user) {
       throw new Error('Opmerking is verplicht bij Andere reden voor artikel ' + artikelCode);
     }
 
-    if (isBusReturnDocument(retour)) {
-      if (!isBehoefteArticle(artikelCode)) {
-        throw new Error('Techniekerretour is enkel toegestaan voor behoeftemateriaal. Artikel: ' + artikelCode);
-      }
+    if (isBusReturnDocument(retour) && !isBehoefteArticle(artikelCode)) {
+      throw new Error('Techniekerretour is enkel toegestaan voor behoeftemateriaal. Artikel: ' + artikelCode);
+    }
+
+    const beschikbaar = getAvailableReturnQty_(retour, artikelCode);
+
+    if (beschikbaar <= 0) {
+      throw new Error('Artikel ' + artikelCode + ' is niet beschikbaar voor retour.');
+    }
+
+    if (aantal > beschikbaar) {
+      throw new Error(
+        'Retouraantal overschrijdt beschikbare voorraad voor artikel ' +
+        artikelCode +
+        '. Beschikbaar: ' +
+        beschikbaar
+      );
     }
   });
 }
@@ -355,7 +491,7 @@ function saveReturnLines(payload) {
       artikelOmschrijving: safeText(line.artikelOmschrijving),
       eenheid: safeText(line.eenheid),
       aantal: safeNumber(line.aantal, 0),
-      reden: safeText(line.reden),
+      reden: normalizeReturnReason_(line.reden),
       opmerking: safeText(line.opmerking)
     }))
     .filter(line => line.artikelCode && line.artikelOmschrijving && line.aantal > 0);

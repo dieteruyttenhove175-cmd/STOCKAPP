@@ -1,0 +1,148 @@
+<div id="tabReceipts" class="tab-panel">
+  <div class="card">
+    <div class="section-title">
+      <h2>Nieuwe ontvangst aanmaken</h2>
+      <div class="muted">Documentdatum mag in het verleden liggen. Leverancier is altijd Fluvius en type wordt automatisch bepaald op basis van de artikels.</div>
+    </div>
+
+    <div class="grid three" style="margin-top:12px;">
+      <div>
+        <label>Leverancier</label>
+        <input value="Fluvius" disabled>
+      </div>
+      <div>
+        <label>Type materiaal</label>
+        <input value="Automatisch bepaald op basis van artikellijst" disabled>
+      </div>
+      <div>
+        <label for="receiptOrderNo">BestelbonNr</label>
+        <input id="receiptOrderNo" placeholder="Bestelbonnummer">
+      </div>
+      <div>
+        <label for="receiptExternalRef">Externe referentie</label>
+        <input id="receiptExternalRef" placeholder="Fluvius referentie">
+      </div>
+      <div>
+        <label for="receiptDocumentDate">Documentdatum</label>
+        <input id="receiptDocumentDate" type="date">
+      </div>
+      <div>
+        <label for="receiptReceiveDate">Ontvangstdatum</label>
+        <input id="receiptReceiveDate" type="date">
+      </div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <button id="createReceiptBtn" onclick="createReceipt()">Nieuwe ontvangst aanmaken</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Ontvangstlijst uploaden</h2>
+      <div class="muted">Upload een Excel met ontvangstlijnen. Het systeem maakt automatisch een ontvangst en ontvangstlijnen aan.</div>
+    </div>
+
+    <div class="grid three" style="margin-top:12px;">
+      <div>
+        <label for="receiptUploadFile">Bestand</label>
+        <input id="receiptUploadFile" type="file" accept=".xlsx,.xls">
+      </div>
+      <div>
+        <label for="receiptUploadDate">Documentdatum</label>
+        <input id="receiptUploadDate" type="date">
+      </div>
+      <div>
+        <label for="receiptUploadOrderNo">BestelbonNr</label>
+        <input id="receiptUploadOrderNo" placeholder="Bestelbonnummer">
+      </div>
+      <div>
+        <label for="receiptUploadExternalRef">Externe referentie</label>
+        <input id="receiptUploadExternalRef" placeholder="Fluvius referentie">
+      </div>
+      <div style="align-self:end;">
+        <button id="uploadReceiptBtn" onclick="uploadReceiptDocument()">Ontvangstlijst uploaden</button>
+      </div>
+    </div>
+
+    <div class="note-box">Verwachte kolommen: Artikel, Omschrijving, Aantal, Eenheid. Extra kolommen zoals PalletNR of LabelNR mogen aanwezig zijn.</div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Overzicht ontvangsten</h2>
+      <div class="muted">Open een ontvangst om lijnen toe te voegen of aan te passen.</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>OntvangstID</th>
+            <th>Type</th>
+            <th>Leverancier</th>
+            <th>Bestelbon</th>
+            <th>Documentdatum</th>
+            <th>Status</th>
+            <th class="right">Lijnen</th>
+            <th class="right">Delta</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="receiptsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Geselecteerde ontvangst</h2>
+    <div id="receiptInfo" class="muted">Nog geen actieve ontvangst geselecteerd.</div>
+
+    <div class="grid two" style="margin-top:16px;">
+      <div>
+        <label for="catalogSearch">Zoek in volledige leverancierslijst</label>
+        <input id="catalogSearch" placeholder="Artikelcode / omschrijving / leverancier">
+      </div>
+      <div style="align-self:end;">
+        <button class="btn-light" id="receiptSearchBtn" onclick="searchCatalogForReceipt()">Zoeken</button>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th>Leverancier</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="catalogResultsBody"></tbody>
+      </table>
+    </div>
+
+    <div class="table-wrap" style="margin-top:20px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th class="right">Besteld</th>
+            <th class="right">Ontvangen</th>
+            <th class="right">Delta</th>
+            <th>Reden delta</th>
+            <th>Opmerking</th>
+          </tr>
+        </thead>
+        <tbody id="receiptLinesBody"></tbody>
+      </table>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn-light" id="saveReceiptBtn" onclick="saveReceiptDetail()">Ontvangstlijnen opslaan</button>
+      <button id="submitReceiptBtn" onclick="submitReceiptDetail()">Ontvangst indienen</button>
+    </div>
+  </div>
+</div>

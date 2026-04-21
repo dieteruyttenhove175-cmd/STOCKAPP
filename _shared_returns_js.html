@@ -1,0 +1,308 @@
+<script>
+  function getSelectedReturnMode() {
+    return document.getElementById('returnModeSelect')?.value || 'BUS_TO_CENTRAL';
+  }
+
+  function getReturnReasonOptions(returnMode) {
+    return returnMode === 'CENTRAL_TO_FLUVIUS'
+      ? ['Te veel geleverd', 'NPC / beschadigde artikelen', 'Andere reden']
+      : ['NPC / beschadigde artikelen', 'Andere reden'];
+  }
+
+  function onReturnModeChange() {
+    const mode = getSelectedReturnMode();
+    const techWrap = document.getElementById('returnTechWrap');
+    if (techWrap) techWrap.style.display = mode === 'BUS_TO_CENTRAL' ? '' : 'none';
+  }
+
+  function renderReturnsSection(data) {
+    APP_STATE.returnsData = data || {};
+    renderReturnTechnicians((APP_STATE.returnsData.technicians) || []);
+    renderReturnsList((APP_STATE.returnsData.returns) || []);
+
+    if (APP_STATE.selectedReturnId) {
+      const retour = ((APP_STATE.returnsData.returns) || []).find(r => r.retourId === APP_STATE.selectedReturnId);
+      renderReturnDetail(retour || null);
+    }
+  }
+
+  function renderReturnTechnicians(technicians) {
+    const select = document.getElementById('returnTechSelect');
+    if (!select) return;
+
+    select.innerHTML = technicians.length
+      ? technicians.map(t => `<option value="${t.code}">${t.naam} (${t.code})</option>`).join('')
+      : '<option value="">Geen techniekers</option>';
+  }
+
+  function renderReturnsList(returns) {
+    const body = document.getElementById('returnsBody');
+    if (!body) return;
+
+    if (!returns.length) {
+      body.innerHTML = `<tr><td colspan="6" class="muted">Nog geen retouren.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = returns.map(retour => `
+      <tr class="${retour.retourId === APP_STATE.selectedReturnId ? 'selected-row' : ''}">
+        <td>${retour.retourId}</td>
+        <td>${retour.returnMode === 'CENTRAL_TO_FLUVIUS' ? 'Centraal magazijn' : (retour.techniekerNaam || retour.techniekerCode || '')}</td>
+        <td>${retour.documentDatum || ''}</td>
+        <td><span class="status-badge">${retour.status || ''}</span></td>
+        <td class="right">${retour.lineCount || 0}</td>
+        <td><button class="btn-light" onclick="selectReturn('${retour.retourId}')">Open</button></td>
+      </tr>
+    `).join('');
+  }
+
+  function selectReturn(retourId) {
+    APP_STATE.selectedReturnId = retourId;
+    const retour = ((APP_STATE.returnsData && APP_STATE.returnsData.returns) || []).find(r => r.retourId === retourId);
+    renderReturnsList((APP_STATE.returnsData && APP_STATE.returnsData.returns) || []);
+    renderReturnDetail(retour || null);
+    switchTab('returns');
+  }
+
+  function renderReturnDetail(retour) {
+    const info = document.getElementById('returnInfo');
+    const body = document.getElementById('returnLinesBody');
+    if (!info || !body) return;
+
+    if (!retour) {
+      info.textContent = 'Nog geen retour geselecteerd.';
+      body.innerHTML = `<tr><td colspan="7" class="muted">Geen lijnen.</td></tr>`;
+      return;
+    }
+
+    const mode = retour.returnMode || 'BUS_TO_CENTRAL';
+    const reasons = getReturnReasonOptions(mode);
+
+    info.innerHTML = `
+      <span class="pill">${retour.retourId}</span>
+      <span class="pill">${mode === 'CENTRAL_TO_FLUVIUS' ? 'Centraal magazijn → Fluvius' : 'Bus → Centraal magazijn'}</span>
+      <span class="pill">${retour.documentDatum || ''}</span>
+      <span class="pill">${retour.status || ''}</span>
+    `;
+
+    body.innerHTML = (retour.lines || []).map((line, idx) => `
+      <tr>
+        <td>${line.artikelCode || ''}</td>
+        <td>${line.artikelOmschrijving || ''}</td>
+        <td>${line.eenheid || ''}</td>
+        <td class="right">${Number(line.beschikbaarAantal || 0)}</td>
+        <td class="right"><input type="number" min="1" step="1" value="${line.aantal || 1}" data-return-field="qty" data-return-row="${idx}"></td>
+        <td><select data-return-field="reason" data-return-row="${idx}">${reasons.map(r => `<option value="${r}" ${line.reden === r ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+        <td><textarea data-return-field="note" data-return-row="${idx}">${line.opmerking || ''}</textarea></td>
+      </tr>
+    `).join('') || `<tr><td colspan="7" class="muted">Geen lijnen.</td></tr>`;
+  }
+
+  function createReturnFlow() {
+    openConfirm('Nieuwe retour aanmaken?', executeCreateReturnFlow);
+  }
+
+  async function executeCreateReturnFlow() {
+    const mode = getSelectedReturnMode();
+    const techniekerCode = mode === 'BUS_TO_CENTRAL'
+      ? (document.getElementById('returnTechSelect')?.value || '')
+      : '';
+
+    const documentDatum = document.getElementById('returnDocumentDate')?.value || '';
+
+    if (mode === 'BUS_TO_CENTRAL' && !techniekerCode) {
+      showError('Kies eerst een technieker / bus.');
+      return;
+    }
+
+    if (!documentDatum) {
+      showError('Documentdatum is verplicht.');
+      return;
+    }
+
+    await runAction({
+      buttonId: 'createReturnBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Retour aanmaken...',
+      method: 'createReturn',
+      payload: withSession({
+        techniekerCode,
+        documentDatum,
+        returnMode: mode
+      }),
+      fallbackErrorMessage: 'Fout bij aanmaken retour.',
+      onSuccess: result => {
+        APP_STATE.selectedReturnId = result.retourId;
+        showSuccess(result.message);
+      }
+    });
+  }
+
+  async function searchCatalogForReturn() {
+    const query = (document.getElementById('returnCatalogSearch')?.value || '').trim();
+    if (!query) {
+      showError('Geef eerst een artikelcode of zoekterm in.');
+      return;
+    }
+
+    if (!APP_STATE.selectedReturnId) {
+      showError('Selecteer eerst een retour.');
+      return;
+    }
+
+    showBusy('Catalogus zoeken...');
+    try {
+      const results = await serverCall('searchReturnCatalog', withSession({
+        retourId: APP_STATE.selectedReturnId,
+        query
+      }));
+
+      hideBusy();
+
+      const body = document.getElementById('returnCatalogResultsBody');
+      if (!body) return;
+
+      if (!results || !results.length) {
+        body.innerHTML = `<tr><td colspan="5" class="muted">Geen resultaten.</td></tr>`;
+        return;
+      }
+
+      body.innerHTML = results.map(item => `
+        <tr>
+          <td>${item.artikelCode}</td>
+          <td>${item.artikelOmschrijving}</td>
+          <td>${item.eenheid}</td>
+          <td class="right">${Number(item.beschikbaarAantal || 0)}</td>
+          <td><button class="btn-light" onclick="addCatalogItemToReturn('${escapeJs(item.artikelCode)}','${escapeJs(item.artikelOmschrijving)}','${escapeJs(item.eenheid)}',${Number(item.beschikbaarAantal || 0)})">Toevoegen</button></td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      hideBusy();
+      showError(extractErrorMessage(err, 'Fout bij zoeken.'), true);
+    }
+  }
+
+  function addCatalogItemToReturn(code, omschrijving, eenheid, beschikbaarAantal) {
+    const retour = ((APP_STATE.returnsData && APP_STATE.returnsData.returns) || []).find(r => r.retourId === APP_STATE.selectedReturnId);
+    if (!retour) {
+      showError('Selecteer eerst een retour.');
+      return;
+    }
+
+    retour.lines = retour.lines || [];
+    if (retour.lines.some(x => x.artikelCode === code)) {
+      showError('Dit artikel zit al in de retour.');
+      return;
+    }
+
+    const defaultReason = (retour.returnMode || 'BUS_TO_CENTRAL') === 'CENTRAL_TO_FLUVIUS'
+      ? 'Te veel geleverd'
+      : 'NPC / beschadigde artikelen';
+
+    retour.lines.push({
+      artikelCode: code,
+      artikelOmschrijving: omschrijving,
+      eenheid,
+      aantal: 1,
+      reden: defaultReason,
+      opmerking: '',
+      beschikbaarAantal: Number(beschikbaarAantal || 0)
+    });
+
+    renderReturnDetail(retour);
+  }
+
+  function collectReturnLines() {
+    const retour = ((APP_STATE.returnsData && APP_STATE.returnsData.returns) || []).find(r => r.retourId === APP_STATE.selectedReturnId);
+    if (!retour) return [];
+
+    return (retour.lines || []).map((line, idx) => ({
+      artikelCode: line.artikelCode,
+      artikelOmschrijving: line.artikelOmschrijving,
+      eenheid: line.eenheid,
+      aantal: Number(document.querySelector(`[data-return-field="qty"][data-return-row="${idx}"]`)?.value || 0),
+      reden: document.querySelector(`[data-return-field="reason"][data-return-row="${idx}"]`)?.value || '',
+      opmerking: document.querySelector(`[data-return-field="note"][data-return-row="${idx}"]`)?.value || '',
+      beschikbaarAantal: Number(line.beschikbaarAantal || 0)
+    }));
+  }
+
+  function validateReturnLines(lines, retour) {
+    if (!lines.length) return 'Voeg minstens 1 retourlijn toe.';
+    const allowedReasons = getReturnReasonOptions((retour && retour.returnMode) || 'BUS_TO_CENTRAL');
+
+    for (const line of lines) {
+      if (line.aantal <= 0) return `Aantal moet groter zijn dan 0 voor artikel ${line.artikelCode}.`;
+      if (!allowedReasons.includes(line.reden)) return `Ongeldige reden voor artikel ${line.artikelCode}.`;
+      if (line.reden === 'Andere reden' && !String(line.opmerking || '').trim()) {
+        return `Opmerking is verplicht bij 'Andere reden' voor artikel ${line.artikelCode}.`;
+      }
+      if (line.aantal > Number(line.beschikbaarAantal || 0)) {
+        return `Retouraantal overschrijdt beschikbaar aantal voor artikel ${line.artikelCode}.`;
+      }
+    }
+
+    return '';
+  }
+
+  function saveReturnDetail() {
+    openConfirm('Retourlijnen opslaan?', executeSaveReturnDetail);
+  }
+
+  async function executeSaveReturnDetail() {
+    const retour = ((APP_STATE.returnsData && APP_STATE.returnsData.returns) || []).find(r => r.retourId === APP_STATE.selectedReturnId);
+    const lines = collectReturnLines();
+    const validation = validateReturnLines(lines, retour);
+
+    if (validation) {
+      showError(validation);
+      return;
+    }
+
+    await runAction({
+      buttonId: 'saveReturnBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Retourlijnen opslaan...',
+      method: 'saveReturnLines',
+      payload: withSession({
+        retourId: APP_STATE.selectedReturnId,
+        lines
+      }),
+      fallbackErrorMessage: 'Fout bij opslaan retourlijnen.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+
+  function submitReturnDetail() {
+    openConfirm('Retour indienen?', executeSubmitReturnDetail);
+  }
+
+  async function executeSubmitReturnDetail() {
+    const retour = ((APP_STATE.returnsData && APP_STATE.returnsData.returns) || []).find(r => r.retourId === APP_STATE.selectedReturnId);
+    const lines = collectReturnLines();
+    const validation = validateReturnLines(lines, retour);
+
+    if (validation) {
+      showError(validation);
+      return;
+    }
+
+    await serverCall('saveReturnLines', withSession({
+      retourId: APP_STATE.selectedReturnId,
+      lines
+    }));
+
+    await runAction({
+      buttonId: 'submitReturnBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Retour indienen...',
+      method: 'submitReturn',
+      payload: withSession({
+        retourId: APP_STATE.selectedReturnId,
+        actor: document.getElementById('actorInput')?.value || 'Gebruiker'
+      }),
+      fallbackErrorMessage: 'Fout bij indienen retour.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+</script>

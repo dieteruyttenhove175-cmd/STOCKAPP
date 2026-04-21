@@ -1,0 +1,215 @@
+<script>
+  window.APP_STATE = window.APP_STATE || {
+    warehouseData: null,
+    receiptsData: null,
+    returnsData: null,
+    needIssueData: null,
+    selectedGroupKey: null,
+    selectedReceiptId: null,
+    selectedReturnId: null,
+    selectedNeedIssueId: null,
+    selectedStockArticle: null,
+    activeTab: 'deliveries',
+    lastUserInteractionAt: Date.now()
+  };
+
+  function getPagePermissions() {
+    return window.PAGE_PERMISSIONS || {};
+  }
+
+  function hasPermission(flagName) {
+    return !!getPagePermissions()[flagName];
+  }
+
+  function touchUserInteraction() {
+    APP_STATE.lastUserInteractionAt = Date.now();
+  }
+
+  function ensureSession() {
+    if (!window.SESSION_ID && window.CURRENT_AUTH_MODE !== 'admin_google') {
+      showError('Geen actieve sessie gevonden. Meld je opnieuw aan.');
+      return false;
+    }
+    return true;
+  }
+
+  function withSession(payload) {
+    return Object.assign({}, payload || {}, {
+      sessionId: window.SESSION_ID || ''
+    });
+  }
+
+  function escapeJs(text) {
+    return String(text || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/\n/g, ' ')
+      .replace(/\r/g, ' ');
+  }
+
+  function extractErrorMessage(err, fallbackMessage) {
+    if (err && err.message) return err.message;
+    if (typeof err === 'string' && err.trim()) return err;
+    return fallbackMessage || 'Onbekende fout.';
+  }
+
+  function clearError() {
+    const box = document.getElementById('errorBox');
+    if (box) box.style.display = 'none';
+  }
+
+  function showError(message, usePopup) {
+    const box = document.getElementById('errorBox');
+    if (box) {
+      box.textContent = message || 'Onbekende fout.';
+      box.style.display = 'block';
+    }
+    if (usePopup) openPopup(message || 'Onbekende fout.');
+  }
+
+  function showSuccess(message) {
+    const box = document.getElementById('successBox');
+    if (box) {
+      box.textContent = message || 'Actie uitgevoerd.';
+      box.style.display = 'block';
+      setTimeout(() => { box.style.display = 'none'; }, 4000);
+    }
+    openPopup(message || 'Actie uitgevoerd.');
+  }
+
+  function openPopup(message) {
+    const msg = document.getElementById('popupMessage');
+    const overlay = document.getElementById('popupOverlay');
+    if (msg) msg.textContent = message || 'Actie uitgevoerd';
+    if (overlay) overlay.style.display = 'flex';
+  }
+
+  function closePopup() {
+    const overlay = document.getElementById('popupOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function openConfirm(message, onConfirm) {
+    const msg = document.getElementById('confirmMessage');
+    const overlay = document.getElementById('confirmOverlay');
+    const btn = document.getElementById('confirmOkBtn');
+
+    if (msg) msg.textContent = message || 'Bevestigen?';
+    if (overlay) overlay.style.display = 'flex';
+
+    if (btn) {
+      btn.onclick = function () {
+        closeConfirm();
+        if (typeof onConfirm === 'function') onConfirm();
+      };
+    }
+  }
+
+  function closeConfirm() {
+    const overlay = document.getElementById('confirmOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function showBusy(message) {
+    const msg = document.getElementById('busyMessage');
+    const overlay = document.getElementById('busyOverlay');
+    if (msg) msg.textContent = message || 'Backend bezig...';
+    if (overlay) overlay.style.display = 'flex';
+  }
+
+  function hideBusy() {
+    const overlay = document.getElementById('busyOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function serverCall(method, payload) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)[method](payload);
+    });
+  }
+
+  async function runAction(options) {
+    const button = options.buttonId ? document.getElementById(options.buttonId) : null;
+    const originalText = button ? button.textContent : '';
+
+    clearError();
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = options.busyButtonText || 'Backend bezig...';
+    }
+
+    showBusy(options.busyMessage || 'Backend bezig...');
+
+    try {
+      const result = await serverCall(options.method, options.payload || {});
+      hideBusy();
+
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+
+      if (typeof options.onSuccess === 'function') {
+        options.onSuccess(result);
+      }
+    } catch (err) {
+      hideBusy();
+
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+
+      showError(extractErrorMessage(err, options.fallbackErrorMessage || 'Onbekende fout.'), true);
+
+      if (typeof options.onFailure === 'function') {
+        options.onFailure(err);
+      }
+    }
+  }
+
+  function switchTab(tabName) {
+    APP_STATE.activeTab = tabName;
+
+    const map = {
+      deliveries: ['tabDeliveries', 'tabDeliveriesBtn'],
+      receipts: ['tabReceipts', 'tabReceiptsBtn'],
+      returns: ['tabReturns', 'tabReturnsBtn'],
+      needissues: ['tabNeedIssues', 'tabNeedIssuesBtn'],
+      central: ['tabCentral', 'tabCentralBtn'],
+      notifications: ['tabNotifications', 'tabNotificationsBtn']
+    };
+
+    Object.keys(map).forEach(key => {
+      const panel = document.getElementById(map[key][0]);
+      const btn = document.getElementById(map[key][1]);
+      if (panel) panel.classList.toggle('active', key === tabName);
+      if (btn) btn.classList.toggle('active', key === tabName);
+    });
+  }
+
+  function initDefaultDatesShared() {
+    const today = new Date();
+    const iso = today.toISOString().slice(0, 10);
+
+    [
+      'receiptDocumentDate',
+      'receiptReceiveDate',
+      'receiptUploadDate',
+      'returnDocumentDate',
+      'needIssueDate',
+      'busCountDate',
+      'stockAdjustDate'
+    ].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && !el.value) el.value = iso;
+    });
+  }
+
+  document.addEventListener('input', touchUserInteraction, true);
+  document.addEventListener('change', touchUserInteraction, true);
+  document.addEventListener('click', touchUserInteraction, true);
+</script>

@@ -1,0 +1,339 @@
+<script>
+  window.RECEIPT_REASONS = ['', 'Niet volledig geleverd', 'Beschadigd ontvangen', 'Verkeerd artikel / verpakking', 'Extra geleverd', 'Andere reden'];
+
+  function renderReceiptsSection(data) {
+    APP_STATE.receiptsData = data || {};
+    renderReceiptsList((APP_STATE.receiptsData.receipts) || []);
+
+    if (APP_STATE.selectedReceiptId) {
+      const receipt = ((APP_STATE.receiptsData.receipts) || []).find(r => r.ontvangstId === APP_STATE.selectedReceiptId);
+      renderReceiptDetail(receipt || null);
+    }
+  }
+
+  function getReceiptUiStatus(receipt) {
+    if (!receipt) return '';
+    if (String(receipt.status || '') === 'Goedgekeurd') return 'Gesloten';
+    return receipt.status || '';
+  }
+
+  function renderReceiptsList(receipts) {
+    const body = document.getElementById('receiptsBody');
+    if (!body) return;
+
+    if (!receipts.length) {
+      body.innerHTML = `<tr><td colspan="9" class="muted">Nog geen ontvangsten.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = receipts.map(receipt => `
+      <tr class="${receipt.ontvangstId === APP_STATE.selectedReceiptId ? 'selected-row' : ''}">
+        <td>${receipt.ontvangstId}</td>
+        <td>${receipt.typeMateriaal || ''}</td>
+        <td>${receipt.leverancier || ''}</td>
+        <td>${receipt.bestelbonNr || ''}</td>
+        <td>${receipt.documentDatum || ''}</td>
+        <td><span class="status-badge">${getReceiptUiStatus(receipt)}</span></td>
+        <td class="right">${receipt.lineCount || 0}</td>
+        <td class="right">${receipt.deltaCount || 0}</td>
+        <td><button class="btn-light" onclick="selectReceipt('${receipt.ontvangstId}')">Open</button></td>
+      </tr>
+    `).join('');
+  }
+
+  function selectReceipt(receiptId) {
+    APP_STATE.selectedReceiptId = receiptId;
+    const receipt = ((APP_STATE.receiptsData && APP_STATE.receiptsData.receipts) || []).find(r => r.ontvangstId === receiptId);
+    renderReceiptsList((APP_STATE.receiptsData && APP_STATE.receiptsData.receipts) || []);
+    renderReceiptDetail(receipt || null);
+    switchTab('receipts');
+  }
+
+  function renderReceiptDetail(receipt) {
+    const info = document.getElementById('receiptInfo');
+    const body = document.getElementById('receiptLinesBody');
+
+    if (!info || !body) return;
+
+    if (!receipt || String(receipt.status || '') === 'Goedgekeurd') {
+      info.textContent = 'Nog geen actieve ontvangst geselecteerd.';
+      body.innerHTML = `<tr><td colspan="8" class="muted">Geen actieve lijnen.</td></tr>`;
+      const results = document.getElementById('catalogResultsBody');
+      if (results) results.innerHTML = '';
+      return;
+    }
+
+    info.innerHTML = `
+      <span class="pill">${receipt.ontvangstId}</span>
+      <span class="pill">${receipt.typeMateriaal || ''}</span>
+      <span class="pill">${receipt.leverancier || ''}</span>
+      <span class="pill">${receipt.documentDatum || ''}</span>
+      <span class="pill">${getReceiptUiStatus(receipt)}</span>
+    `;
+
+    const isLocked = ['Ingediend', 'Goedgekeurd'].includes(String(receipt.status || ''));
+
+    body.innerHTML = (receipt.lines || []).map((line, idx) => `
+      <tr>
+        <td>${line.artikelCode || ''}</td>
+        <td>${line.artikelOmschrijving || ''}</td>
+        <td>${line.eenheid || ''}</td>
+        <td class="right"><input type="number" min="0" step="1" value="${line.besteldAantal || 0}" data-receipt-field="besteld" data-receipt-row="${idx}" oninput="refreshReceiptDelta(${idx})" ${isLocked ? 'disabled' : ''}></td>
+        <td class="right"><input type="number" min="0" step="1" value="${line.ontvangenAantal || 0}" data-receipt-field="ontvangen" data-receipt-row="${idx}" oninput="refreshReceiptDelta(${idx})" ${isLocked ? 'disabled' : ''}></td>
+        <td class="right"><span id="receipt-delta-${idx}">${line.deltaAantal || 0}</span></td>
+        <td><select data-receipt-field="reason" data-receipt-row="${idx}" ${isLocked ? 'disabled' : ''}>${RECEIPT_REASONS.map(r => `<option value="${r}" ${line.redenDelta === r ? 'selected' : ''}>${r || '-- kies reden --'}</option>`).join('')}</select></td>
+        <td><textarea data-receipt-field="note" data-receipt-row="${idx}" ${isLocked ? 'disabled' : ''}>${line.opmerking || ''}</textarea></td>
+      </tr>
+    `).join('') || `<tr><td colspan="8" class="muted">Geen lijnen.</td></tr>`;
+  }
+
+  function refreshReceiptDelta(idx) {
+    const besteld = Number(document.querySelector(`[data-receipt-field="besteld"][data-receipt-row="${idx}"]`)?.value || 0);
+    const ontvangen = Number(document.querySelector(`[data-receipt-field="ontvangen"][data-receipt-row="${idx}"]`)?.value || 0);
+    const el = document.getElementById(`receipt-delta-${idx}`);
+    if (el) el.textContent = String(besteld - ontvangen);
+  }
+
+  function collectReceiptLines() {
+    const receipt = ((APP_STATE.receiptsData && APP_STATE.receiptsData.receipts) || []).find(r => r.ontvangstId === APP_STATE.selectedReceiptId);
+    if (!receipt) return [];
+
+    return (receipt.lines || []).map((line, idx) => ({
+      artikelCode: line.artikelCode,
+      artikelOmschrijving: line.artikelOmschrijving,
+      eenheid: line.eenheid,
+      besteldAantal: Number(document.querySelector(`[data-receipt-field="besteld"][data-receipt-row="${idx}"]`)?.value || 0),
+      ontvangenAantal: Number(document.querySelector(`[data-receipt-field="ontvangen"][data-receipt-row="${idx}"]`)?.value || 0),
+      redenDelta: document.querySelector(`[data-receipt-field="reason"][data-receipt-row="${idx}"]`)?.value || '',
+      opmerking: document.querySelector(`[data-receipt-field="note"][data-receipt-row="${idx}"]`)?.value || ''
+    }));
+  }
+
+  function validateReceiptLines(lines) {
+    if (!lines.length) return 'Voeg minstens 1 ontvangstlijn toe.';
+    for (const line of lines) {
+      if (line.besteldAantal < 0) return `Besteld aantal mag niet negatief zijn voor artikel ${line.artikelCode}.`;
+      if (line.ontvangenAantal < 0) return `Ontvangen aantal mag niet negatief zijn voor artikel ${line.artikelCode}.`;
+      const delta = Number(line.besteldAantal || 0) - Number(line.ontvangenAantal || 0);
+      if (delta !== 0 && !line.redenDelta) return `Kies een reden voor delta bij artikel ${line.artikelCode}.`;
+      if (line.redenDelta === 'Andere reden' && !String(line.opmerking || '').trim()) {
+        return `Opmerking is verplicht bij 'Andere reden' voor artikel ${line.artikelCode}.`;
+      }
+    }
+    return '';
+  }
+
+  function createReceipt() {
+    openConfirm('Nieuwe ontvangst aanmaken?', executeCreateReceipt);
+  }
+
+  async function executeCreateReceipt() {
+    await runAction({
+      buttonId: 'createReceiptBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Nieuwe ontvangst aanmaken...',
+      method: 'createManualReceipt',
+      payload: withSession({
+        bestelbonNr: document.getElementById('receiptOrderNo')?.value || '',
+        externeReferentie: document.getElementById('receiptExternalRef')?.value || '',
+        documentDatum: document.getElementById('receiptDocumentDate')?.value || '',
+        ontvangstdatum: document.getElementById('receiptReceiveDate')?.value || '',
+        bronType: 'Manueel'
+      }),
+      fallbackErrorMessage: 'Fout bij aanmaken ontvangst.',
+      onSuccess: result => {
+        APP_STATE.selectedReceiptId = result.ontvangstId;
+        showSuccess(result.message);
+      }
+    });
+  }
+
+  async function searchCatalogForReceipt() {
+    const query = (document.getElementById('catalogSearch')?.value || '').trim();
+    if (!query) {
+      showError('Geef eerst een artikelcode of zoekterm in.');
+      return;
+    }
+
+    showBusy('Catalogus zoeken...');
+    try {
+      const results = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .searchSupplierCatalog(query, window.SESSION_ID);
+      });
+
+      hideBusy();
+
+      const body = document.getElementById('catalogResultsBody');
+      if (!body) return;
+
+      if (!results || !results.length) {
+        body.innerHTML = `<tr><td colspan="5" class="muted">Geen resultaten.</td></tr>`;
+        return;
+      }
+
+      body.innerHTML = results.map(item => `
+        <tr>
+          <td>${item.artikelCode}</td>
+          <td>${item.artikelOmschrijving}</td>
+          <td>${item.eenheid}</td>
+          <td>${item.leverancier}</td>
+          <td><button class="btn-light" onclick="addCatalogItemToReceipt('${escapeJs(item.artikelCode)}','${escapeJs(item.artikelOmschrijving)}','${escapeJs(item.eenheid)}')">Toevoegen</button></td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      hideBusy();
+      showError(extractErrorMessage(err, 'Fout bij zoeken.'), true);
+    }
+  }
+
+  function addCatalogItemToReceipt(code, omschrijving, eenheid) {
+    const receipt = ((APP_STATE.receiptsData && APP_STATE.receiptsData.receipts) || []).find(r => r.ontvangstId === APP_STATE.selectedReceiptId);
+    if (!receipt) {
+      showError('Selecteer eerst een ontvangst.');
+      return;
+    }
+
+    receipt.lines = receipt.lines || [];
+    if (receipt.lines.some(x => x.artikelCode === code)) {
+      showError('Dit artikel zit al in de ontvangst.');
+      return;
+    }
+
+    receipt.lines.push({
+      artikelCode: code,
+      artikelOmschrijving: omschrijving,
+      eenheid: eenheid,
+      besteldAantal: 0,
+      ontvangenAantal: 0,
+      deltaAantal: 0,
+      redenDelta: '',
+      opmerking: ''
+    });
+
+    renderReceiptDetail(receipt);
+  }
+
+  function saveReceiptDetail() {
+    openConfirm('Ontvangstlijnen opslaan?', executeSaveReceiptDetail);
+  }
+
+  async function executeSaveReceiptDetail() {
+    const lines = collectReceiptLines();
+    const validation = validateReceiptLines(lines);
+    if (validation) {
+      showError(validation);
+      return;
+    }
+
+    await runAction({
+      buttonId: 'saveReceiptBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Ontvangstlijnen opslaan...',
+      method: 'saveReceiptLines',
+      payload: withSession({
+        ontvangstId: APP_STATE.selectedReceiptId,
+        lines
+      }),
+      fallbackErrorMessage: 'Fout bij opslaan ontvangstlijnen.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+
+  function submitReceiptDetail() {
+    openConfirm('Ontvangst indienen?', executeSubmitReceiptDetail);
+  }
+
+  async function executeSubmitReceiptDetail() {
+    const lines = collectReceiptLines();
+    const validation = validateReceiptLines(lines);
+    if (validation) {
+      showError(validation);
+      return;
+    }
+
+    await serverCall('saveReceiptLines', withSession({
+      ontvangstId: APP_STATE.selectedReceiptId,
+      lines
+    }));
+
+    await runAction({
+      buttonId: 'submitReceiptBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Ontvangst indienen...',
+      method: 'submitReceipt',
+      payload: withSession({
+        ontvangstId: APP_STATE.selectedReceiptId,
+        actor: document.getElementById('actorInput')?.value || 'Gebruiker'
+      }),
+      fallbackErrorMessage: 'Fout bij indienen ontvangst.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+
+  async function uploadReceiptDocument() {
+    const fileInput = document.getElementById('receiptUploadFile');
+    const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+
+    if (!file) {
+      showError('Kies eerst een Excel-bestand.');
+      return;
+    }
+
+    showBusy('Bestand voorbereiden...');
+
+    try {
+      const rows = await parseReceiptWorkbookInBrowser(file);
+      hideBusy();
+
+      await runAction({
+        buttonId: 'uploadReceiptBtn',
+        busyButtonText: 'Backend bezig...',
+        busyMessage: 'Ontvangstbestand importeren...',
+        method: 'importReceiptFromRows',
+        payload: withSession({
+          documentDatum: document.getElementById('receiptUploadDate')?.value || '',
+          bestelbonNr: document.getElementById('receiptUploadOrderNo')?.value || '',
+          externeReferentie: document.getElementById('receiptUploadExternalRef')?.value || '',
+          rows: rows
+        }),
+        fallbackErrorMessage: 'Fout bij importeren ontvangstbestand.',
+        onSuccess: result => {
+          APP_STATE.selectedReceiptId = result.ontvangstId;
+          showSuccess(result.message);
+        }
+      });
+    } catch (err) {
+      hideBusy();
+      showError(extractErrorMessage(err, 'Kon het bestand niet verwerken.'), true);
+    }
+  }
+
+  async function parseReceiptWorkbookInBrowser(file) {
+    const arrayBuffer = await file.arrayBuffer();
+
+    if (!window.XLSX) {
+      throw new Error('XLSX library ontbreekt in de pagina. Voeg SheetJS later toe in de shell.');
+    }
+
+    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    const sheetName = workbook.SheetNames.includes('Gecombineerd')
+      ? 'Gecombineerd'
+      : workbook.SheetNames[0];
+
+    const sheet = workbook.Sheets[sheetName];
+    const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    return rawRows.map(row => ({
+      artikelCode: row.Artikel || row.artikel || '',
+      artikelOmschrijving: row.Omschrijving || row.omschrijving || '',
+      aantal: row.Aantal || row.aantal || '',
+      eenheid: row.Eenheid || row.eenheid || '',
+      palletNr: row.PalletNR || row.palletnr || '',
+      labelNr: row.LabelNR || row.labelnr || '',
+      notitie: row.Notitie || row.notitie || ''
+    }));
+  }
+</script>
