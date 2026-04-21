@@ -913,9 +913,14 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
       const CURRENT_USER_NAME = '<?= currentUserName ?>';
       const CURRENT_USER_ROLE = '<?= currentUserRole ?>';
       const CURRENT_AUTH_MODE = '<?= currentAuthMode ?>';
-    </script>
+      
+       console.log('SESSION_ID =', SESSION_ID);
+  console.log('CURRENT_AUTH_MODE =', CURRENT_AUTH_MODE);
+  console.log('storage sid =', sessionStorage.getItem('stockapp.sid'));
+  console.log('url =', window.location.href);
+    
 
-    <script>
+    
       /* =========================================================
          WH-B3 — STATE + HELPERS
          ========================================================= */
