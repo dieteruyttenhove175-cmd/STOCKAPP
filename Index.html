@@ -1,10 +1,13 @@
 <!DOCTYPE html>
   (function () {
-    const bootstrapSid = <?= JSON.stringify(typeof bootstrapSessionId !== 'undefined' ? bootstrapSessionId : '') ?>;
     const storageKey = 'stockapp.sid';
+    const templateSid =
+      '<?= bootstrapSessionId ?>' ||
+      '<?= currentSessionId ?>' ||
+      '';
 
-    if (bootstrapSid) {
-      sessionStorage.setItem(storageKey, bootstrapSid);
+    if (templateSid) {
+      sessionStorage.setItem(storageKey, templateSid);
 
       const url = new URL(window.location.href);
       if (url.searchParams.has('sid')) {
