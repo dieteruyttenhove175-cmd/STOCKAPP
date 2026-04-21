@@ -1,31 +1,32 @@
 <!DOCTYPE html>
-  (function () {
-    const storageKey = 'stockapp.sid';
-    const templateSid =
-      '<?= bootstrapSessionId ?>' ||
-      '<?= currentSessionId ?>' ||
-      '';
-
-    if (templateSid) {
-      sessionStorage.setItem(storageKey, templateSid);
-
-      const url = new URL(window.location.href);
-      if (url.searchParams.has('sid')) {
-        url.searchParams.delete('sid');
-        const qs = url.searchParams.toString();
-        const newUrl = url.pathname + (qs ? '?' + qs : '') + url.hash;
-        history.replaceState({}, document.title, newUrl);
-      }
-    }
-  })();
 <html>
   <head>
     <base target="_top">
-    <style>
-      /* =========================================================
-         WAREHOUSE.HTML — V2
-         ========================================================= */
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
+    <script>
+      (function () {
+        const storageKey = 'stockapp.sid';
+        const templateSid =
+          '<?= bootstrapSessionId ?>' ||
+          '<?= currentSessionId ?>' ||
+          '';
+
+        if (templateSid) {
+          sessionStorage.setItem(storageKey, templateSid);
+
+          const url = new URL(window.location.href);
+          if (url.searchParams.has('sid')) {
+            url.searchParams.delete('sid');
+            const qs = url.searchParams.toString();
+            const newUrl = url.pathname + (qs ? '?' + qs : '') + url.hash;
+            history.replaceState({}, document.title, newUrl);
+          }
+        }
+      })();
+    </script>
+
+    <style>
       :root {
         --bg: #f8fafc;
         --card: #ffffff;
@@ -321,8 +322,8 @@
   <body>
     <div class="wrap">
       <div class="card">
-        <h1>Magazijn dashboard</h1>
-        <div class="muted">Grabbelstock, ontvangsten, retouren, behoefte-uitgiftes, tellingen en meldingen.</div>
+        <h1>Manager dashboard</h1>
+        <div class="muted">Manageroverzicht van grabbelstock, ontvangsten, retouren, behoefte-uitgiftes, tellingen en meldingen.</div>
       </div>
 
       <div id="successBox" class="success"></div>
@@ -356,7 +357,7 @@
       <div class="card">
         <div class="grid topbar">
           <div>
-            <label for="actorInput">Naam magazijnier</label>
+            <label for="actorInput">Naam manager</label>
             <input id="actorInput" placeholder="Bijv. Dieter">
           </div>
           <button class="btn-light" id="refreshBtn" onclick="manualRefresh()">Vernieuwen</button>
@@ -894,7 +895,7 @@
       <div id="tabNotifications" class="tab-panel">
         <div class="card">
           <h2>Meldingen</h2>
-          <div class="muted">Meldingen voor magazijn over ontvangsten, retouren, stocktellingen en opvolging.</div>
+          <div class="muted">Meldingen voor manager over ontvangsten, retouren, stocktellingen en opvolging.</div>
           <div id="notificationsWrap" style="margin-top:16px;"></div>
         </div>
       </div>
@@ -902,36 +903,33 @@
 
     <script>
       const SESSION_ID =
-  sessionStorage.getItem('stockapp.sid') ||
-  '<?= currentSessionId ?>' ||
-  '<?= bootstrapSessionId ?>' ||
-  '';
+        sessionStorage.getItem('stockapp.sid') ||
+        '<?= currentSessionId ?>' ||
+        '<?= bootstrapSessionId ?>' ||
+        '';
 
-if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
-  sessionStorage.setItem('stockapp.sid', SESSION_ID);
-}
+      if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
+        sessionStorage.setItem('stockapp.sid', SESSION_ID);
+      }
+
       const CURRENT_USER_NAME = '<?= currentUserName ?>';
       const CURRENT_USER_ROLE = '<?= currentUserRole ?>';
       const CURRENT_AUTH_MODE = '<?= currentAuthMode ?>';
     </script>
 
     <script>
-      /* =========================================================
-         WH-B3 — STATE + HELPERS
-         ========================================================= */
-
       let warehouseData = null;
       let receiptsData = null;
       let returnsData = null;
       let needIssueData = null;
 
-      let selectedGroupKey = localStorage.getItem('warehouse_selected_group_key') || null;
-      let selectedReceiptId = localStorage.getItem('warehouse_selected_receipt_id') || null;
-      let selectedReturnId = localStorage.getItem('warehouse_selected_return_id') || null;
-      let selectedNeedIssueId = localStorage.getItem('warehouse_selected_need_issue_id') || null;
+      let selectedGroupKey = localStorage.getItem('manager_selected_group_key') || null;
+      let selectedReceiptId = localStorage.getItem('manager_selected_receipt_id') || null;
+      let selectedReturnId = localStorage.getItem('manager_selected_return_id') || null;
+      let selectedNeedIssueId = localStorage.getItem('manager_selected_need_issue_id') || null;
       let selectedStockArticle = null;
       let freezeSelectedRender = false;
-      let activeTab = localStorage.getItem('warehouse_active_tab') || 'deliveries';
+      let activeTab = localStorage.getItem('manager_active_tab') || 'deliveries';
       let lastUserInteractionAt = Date.now();
 
       const REASONS = ['', 'Niet genoeg in stock', 'Teveel besteld', 'Andere reden'];
@@ -1040,7 +1038,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
       function switchTab(tabName) {
         activeTab = tabName;
-        localStorage.setItem('warehouse_active_tab', tabName);
+        localStorage.setItem('manager_active_tab', tabName);
 
         ['deliveries', 'receipts', 'returns', 'needissues', 'central', 'notifications'].forEach(name => {
           const panel = document.getElementById('tab' + name.charAt(0).toUpperCase() + name.slice(1));
@@ -1103,10 +1101,10 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
         selectedReturnId = null;
         selectedNeedIssueId = null;
 
-        localStorage.removeItem('warehouse_selected_group_key');
-        localStorage.removeItem('warehouse_selected_receipt_id');
-        localStorage.removeItem('warehouse_selected_return_id');
-        localStorage.removeItem('warehouse_selected_need_issue_id');
+        localStorage.removeItem('manager_selected_group_key');
+        localStorage.removeItem('manager_selected_receipt_id');
+        localStorage.removeItem('manager_selected_return_id');
+        localStorage.removeItem('manager_selected_need_issue_id');
 
         renderSelectedEmpty();
         renderReceiptDetail(null);
@@ -1213,10 +1211,6 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
     </script>
 
     <script>
-      /* =========================================================
-         WH-B4 — LOADERS
-         ========================================================= */
-
       function loadAll(fullRender) {
         if (!ensureSession()) return;
 
@@ -1229,7 +1223,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
       function loadWarehouse(fullRender, useBusy) {
         if (!ensureSession()) return;
-        if (useBusy) showBusy('Magazijngegevens laden...');
+        if (useBusy) showBusy('Managergegevens laden...');
 
         google.script.run
           .withSuccessHandler(data => {
@@ -1238,7 +1232,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           })
           .withFailureHandler(err => {
             if (useBusy) hideBusy();
-            showError(extractErrorMessage(err, 'Fout bij laden magazijngegevens.'), true);
+            showError(extractErrorMessage(err, 'Fout bij laden managergegevens.'), true);
           })
           .getWarehouseData(SESSION_ID);
       }
@@ -1272,10 +1266,6 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
     </script>
 
     <script>
-      /* =========================================================
-         WH-B5 — WAREHOUSE / DELIVERIES
-         ========================================================= */
-
       function renderWarehouse(data, fullRender) {
         warehouseData = data;
         renderStats(data.stats || {}, data.notifications || []);
@@ -1297,7 +1287,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
         if (!selectedGroup) {
           selectedGroup = groups[0];
           selectedGroupKey = selectedGroup.key;
-          localStorage.setItem('warehouse_selected_group_key', selectedGroupKey);
+          localStorage.setItem('manager_selected_group_key', selectedGroupKey);
         }
 
         renderSelectedGroup(selectedGroup);
@@ -1338,7 +1328,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
       function selectGroup(groupKey) {
         selectedGroupKey = groupKey;
-        localStorage.setItem('warehouse_selected_group_key', selectedGroupKey);
+        localStorage.setItem('manager_selected_group_key', selectedGroupKey);
         renderGroups((warehouseData && warehouseData.upcomingGroups) || []);
         const group = ((warehouseData && warehouseData.upcomingGroups) || []).find(g => g.key === groupKey);
         renderSelectedGroup(group);
@@ -1365,7 +1355,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
         }
 
         selectedGroupKey = group.key;
-        localStorage.setItem('warehouse_selected_group_key', selectedGroupKey);
+        localStorage.setItem('manager_selected_group_key', selectedGroupKey);
 
         document.getElementById('selectedInfo').innerHTML = `
           <span class="pill">${group.techniekerNaam}</span>
@@ -1473,7 +1463,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           return;
         }
 
-        const actor = document.getElementById('actorInput').value || 'Magazijn';
+        const actor = document.getElementById('actorInput').value || 'Manager';
         const lines = collectSelectedGroupLines(group);
         const validationError = validateSelectedGroupLines(group, lines);
 
@@ -1552,7 +1542,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `magazijnbon_${group.techniekerCode}_${group.klaarTegenSort.replace(/[: ]/g, '_')}.csv`;
+        a.download = `managerbon_${group.techniekerCode}_${group.klaarTegenSort.replace(/[: ]/g, '_')}.csv`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1561,10 +1551,6 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
     </script>
 
     <script>
-      /* =========================================================
-         WH-B6 — RECEIPTS
-         ========================================================= */
-
       function renderReceiptsSection(data, skipDetailRefresh) {
         receiptsData = data;
         renderReceiptsList(data.receipts || []);
@@ -1612,7 +1598,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
       function selectReceipt(receiptId) {
         selectedReceiptId = receiptId;
-        localStorage.setItem('warehouse_selected_receipt_id', selectedReceiptId);
+        localStorage.setItem('manager_selected_receipt_id', selectedReceiptId);
         const receipt = ((receiptsData && receiptsData.receipts) || []).find(r => r.ontvangstId === receiptId);
         renderReceiptsList(receiptsData.receipts || []);
         renderReceiptDetail(receipt || null);
@@ -1626,7 +1612,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
         if (!receipt || String(receipt.status || '') === 'Goedgekeurd') {
           selectedReceiptId = null;
-          localStorage.removeItem('warehouse_selected_receipt_id');
+          localStorage.removeItem('manager_selected_receipt_id');
           info.textContent = 'Nog geen actieve ontvangst geselecteerd.';
           body.innerHTML = `<tr><td colspan="8" class="muted">Geen actieve lijnen.</td></tr>`;
           document.getElementById('catalogResultsBody').innerHTML = '';
@@ -1729,32 +1715,12 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           onSuccess: result => {
             showSuccess(result.message);
             selectedReceiptId = result.ontvangstId;
-            localStorage.setItem('warehouse_selected_receipt_id', selectedReceiptId);
+            localStorage.setItem('manager_selected_receipt_id', selectedReceiptId);
             loadReceiptsSection(false);
             switchTab('receipts');
           }
         });
       }
-
-      async function searchCatalogForReceipt() {
-        const query = (document.getElementById('catalogSearch').value || '').trim();
-        if (!query) {
-          showError('Geef eerst een artikelcode of zoekterm in.');
-          return;
-        }
-        if (!ensureSession()) return;
-
-        showBusy('Leverancierscatalogus zoeken...');
-        try {
-          const results = await serverCall('searchSupplierCatalog', query, SESSION_ID);
-        } catch (err) {}
-      }
-    </script>
-
-    <script>
-      /* =========================================================
-         WH-B6A — RECEIPTS SEARCH HELPERS
-         ========================================================= */
 
       async function searchCatalogForReceipt() {
         const query = (document.getElementById('catalogSearch').value || '').trim();
@@ -1891,7 +1857,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           await serverCall('saveReceiptLines', withSession({ ontvangstId: selectedReceiptId, lines }));
           const result = await serverCall('submitReceipt', withSession({
             ontvangstId: selectedReceiptId,
-            actor: document.getElementById('actorInput').value || 'Magazijn'
+            actor: document.getElementById('actorInput').value || 'Manager'
           }));
 
           hideBusy();
@@ -1910,10 +1876,6 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
     </script>
 
     <script>
-      /* =========================================================
-         WH-B7 — RETURNS
-         ========================================================= */
-
       function renderReturnsSection(data, skipDetailRefresh) {
         returnsData = data;
         renderReturnTechnicians(data.technicians || []);
@@ -1967,7 +1929,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
       function selectReturn(retourId) {
         selectedReturnId = retourId;
-        localStorage.setItem('warehouse_selected_return_id', selectedReturnId);
+        localStorage.setItem('manager_selected_return_id', selectedReturnId);
         const retour = ((returnsData && returnsData.returns) || []).find(r => r.retourId === retourId);
         renderReturnsList(returnsData.returns || []);
         renderReturnDetail(retour || null);
@@ -2004,7 +1966,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           onSuccess: result => {
             showSuccess(result.message);
             selectedReturnId = result.retourId;
-            localStorage.setItem('warehouse_selected_return_id', selectedReturnId);
+            localStorage.setItem('manager_selected_return_id', selectedReturnId);
             loadReturnsSection(false);
           }
         });
@@ -2017,7 +1979,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
         if (!retour || String(retour.status || '') === 'Goedgekeurd') {
           selectedReturnId = null;
-          localStorage.removeItem('warehouse_selected_return_id');
+          localStorage.removeItem('manager_selected_return_id');
           info.textContent = 'Nog geen retour geselecteerd.';
           body.innerHTML = `<tr><td colspan="6" class="muted">Geen lijnen.</td></tr>`;
           document.getElementById('returnCatalogResultsBody').innerHTML = '';
@@ -2202,7 +2164,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           await serverCall('saveReturnLines', withSession({ retourId: selectedReturnId, lines }));
           const result = await serverCall('submitReturn', withSession({
             retourId: selectedReturnId,
-            actor: document.getElementById('actorInput').value || 'Magazijn'
+            actor: document.getElementById('actorInput').value || 'Manager'
           }));
 
           hideBusy();
@@ -2222,10 +2184,6 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
     </script>
 
     <script>
-      /* =========================================================
-         WH-B8 — NEED ISSUES
-         ========================================================= */
-
       function renderNeedIssuesSection(data, skipDetailRefresh) {
         needIssueData = data;
         renderNeedIssueTechnicians(data.technicians || []);
@@ -2282,7 +2240,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
       function selectNeedIssue(uitgifteId) {
         selectedNeedIssueId = uitgifteId;
-        localStorage.setItem('warehouse_selected_need_issue_id', selectedNeedIssueId);
+        localStorage.setItem('manager_selected_need_issue_id', selectedNeedIssueId);
         const issue = ((needIssueData && needIssueData.issues) || []).find(r => r.uitgifteId === uitgifteId);
         renderNeedIssueList(needIssueData.issues || []);
         renderNeedIssueDetail(issue || null);
@@ -2325,7 +2283,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           onSuccess: result => {
             showSuccess(result.message);
             selectedNeedIssueId = result.uitgifteId;
-            localStorage.setItem('warehouse_selected_need_issue_id', selectedNeedIssueId);
+            localStorage.setItem('manager_selected_need_issue_id', selectedNeedIssueId);
             loadNeedIssuesSection(false);
             switchTab('needissues');
           }
@@ -2339,7 +2297,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
 
         if (!issue || String(issue.status || '') === 'Geboekt') {
           selectedNeedIssueId = null;
-          localStorage.removeItem('warehouse_selected_need_issue_id');
+          localStorage.removeItem('manager_selected_need_issue_id');
           info.textContent = 'Nog geen actieve behoefte-uitgifte geselecteerd.';
           body.innerHTML = `<tr><td colspan="4" class="muted">Geen actieve lijnen.</td></tr>`;
           document.getElementById('needIssueCatalogResultsBody').innerHTML = '';
@@ -2514,7 +2472,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           await serverCall('saveNeedIssueLines', withSession({ uitgifteId: selectedNeedIssueId, lines }));
           const result = await serverCall('bookNeedIssue', withSession({
             uitgifteId: selectedNeedIssueId,
-            actor: document.getElementById('actorInput').value || 'Magazijn'
+            actor: document.getElementById('actorInput').value || 'Manager'
           }));
 
           hideBusy();
@@ -2535,10 +2493,6 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
     </script>
 
     <script>
-      /* =========================================================
-         WH-B9 — CENTRAL / TELLINGEN / NOTIFICATIONS
-         ========================================================= */
-
       function renderCentralWarehouseTable(rows) {
         const body = document.getElementById('centralWarehouseBody');
         if (!body) return;
@@ -2653,7 +2607,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           payload: withSession({
             techniekerCode,
             documentDatum,
-            actor: document.getElementById('actorInput').value || 'Magazijn',
+            actor: document.getElementById('actorInput').value || 'Manager',
             reden: reason,
             requestedArticles: []
           }),
@@ -2688,7 +2642,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
           payload: withSession({
             techniekerCode,
             documentDatum,
-            actor: document.getElementById('actorInput').value || 'Magazijn',
+            actor: document.getElementById('actorInput').value || 'Manager',
             artikelCode,
             reden: 'Gerichte telling op basis van delta-signalen'
           }),
@@ -2793,7 +2747,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
             aantal,
             reden,
             opmerking,
-            actor: document.getElementById('actorInput').value || 'Magazijn'
+            actor: document.getElementById('actorInput').value || 'Manager'
           }),
           fallbackErrorMessage: 'Fout bij manuele toevoeging.',
           onSuccess: result => {
@@ -2853,11 +2807,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
     </script>
 
     <script>
-      /* =========================================================
-         WH-B10 — INIT + AUTO REFRESH
-         ========================================================= */
-
-      function initWarehouseApp() {
+      function initManagerApp() {
         initActorInput();
         initDefaultDates();
 
@@ -2912,7 +2862,7 @@ if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
         loadNeedIssuesSection(skipNeedIssueDetailRefresh);
       }, 30000);
 
-      initWarehouseApp();
+      initManagerApp();
     </script>
   </body>
 </html>
