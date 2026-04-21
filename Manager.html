@@ -323,7 +323,7 @@
     <div class="wrap">
       <div class="card">
         <h1>Manager dashboard</h1>
-        <div class="muted">Manageroverzicht van grabbelstock, ontvangsten, retouren, behoefte-uitgiftes, tellingen en meldingen.</div>
+        <div class="muted">Manageroverzicht van ontvangsten, retouren, behoefte-uitgiftes, voorraad en meldingen.</div>
       </div>
 
       <div id="successBox" class="success"></div>
@@ -369,7 +369,7 @@
 
       <div class="card">
         <div class="tabs">
-          <button id="tabDeliveriesBtn" class="tab-btn active" onclick="switchTab('deliveries')">Grabbelstock beleveringen</button>
+          <button id="tabOverviewBtn" class="tab-btn active" onclick="switchTab('overview')">Overzicht</button>
           <button id="tabReceiptsBtn" class="tab-btn" onclick="switchTab('receipts')">Ontvangsten</button>
           <button id="tabReturnsBtn" class="tab-btn" onclick="switchTab('returns')">Retouren</button>
           <button id="tabNeedIssuesBtn" class="tab-btn" onclick="switchTab('needissues')">Behoefte-uitgiftes</button>
@@ -378,54 +378,63 @@
         </div>
       </div>
 
-      <!-- DELIVERIES -->
-      <div id="tabDeliveries" class="tab-panel active">
-        <div class="card">
-          <h2>Beleveringsmomenten komende 7 dagen</h2>
-          <div class="muted">Gesorteerd van eerst naar later. Kies een beleveringsmoment om de artikellijst te openen.</div>
-          <div class="table-wrap" style="margin-top:12px;">
-            <table>
-              <thead>
-                <tr>
-                  <th>Technieker</th>
-                  <th>Klaar tegen</th>
-                  <th>Status</th>
-                  <th class="right">Lijnen</th>
-                  <th>Actie</th>
-                </tr>
-              </thead>
-              <tbody id="groupsBody"></tbody>
-            </table>
+      <!-- OVERVIEW -->
+      <div id="tabOverview" class="tab-panel active">
+        <div class="grid two">
+          <div class="card">
+            <h2>Open ontvangsten</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>OntvangstID</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th class="right">Lijnen</th>
+                    <th class="right">Delta</th>
+                    <th>Actie</th>
+                  </tr>
+                </thead>
+                <tbody id="overviewReceiptsBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Open retouren</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>RetourID</th>
+                    <th>Technieker</th>
+                    <th>Status</th>
+                    <th class="right">Lijnen</th>
+                    <th>Actie</th>
+                  </tr>
+                </thead>
+                <tbody id="overviewReturnsBody"></tbody>
+              </table>
+            </div>
           </div>
         </div>
 
         <div class="card">
-          <h2>Geselecteerd beleveringsmoment</h2>
-          <div id="selectedInfo" class="muted">Nog geen beleveringsmoment geselecteerd.</div>
-
-          <div class="toolbar">
-            <button id="readyBtn" onclick="saveAndSetGroupStatus('Klaargezet')">Klaargezet</button>
-            <button id="dispatchBtn" onclick="saveAndSetGroupStatus('Meegegeven')">Meegegeven</button>
-            <button id="notPickedBtn" class="btn-light" onclick="saveAndSetNotPicked()">Niet afgehaald</button>
-            <button id="exportCsvBtn" class="btn-light" onclick="exportSelectedCsv()">Export CSV</button>
-          </div>
-
-          <div class="note-box">Afgevinkt = volledig in karretje en voorzien = gevraagd. Niet afgevinkt = lager voorzien aantal + reden verplicht.</div>
-
-          <div class="table-wrap" style="margin-top:12px;">
+          <h2>Open behoefte-uitgiftes</h2>
+          <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>ArtikelNr</th>
-                  <th>Artikel</th>
-                  <th class="right">Gevraagd dozen</th>
-                  <th>Afvinken</th>
-                  <th class="right">Voorzien dozen</th>
-                  <th class="right">Delta dozen</th>
-                  <th>Reden delta</th>
+                  <th>UitgifteID</th>
+                  <th>Technieker</th>
+                  <th>Documentdatum</th>
+                  <th>Status</th>
+                  <th>Reden</th>
+                  <th class="right">Lijnen</th>
+                  <th>Actie</th>
                 </tr>
               </thead>
-              <tbody id="selectedLinesBody"></tbody>
+              <tbody id="overviewNeedIssuesBody"></tbody>
             </table>
           </div>
         </div>
@@ -774,8 +783,8 @@
         </div>
 
         <div class="card">
-          <h2>Gerichte teltaken</h2>
-          <div class="muted">Artikels met veel foutsignalen. Start hiermee een gerichte telling op 1 artikel voor de gekozen bus.</div>
+          <h2>Delta-signalen</h2>
+          <div class="muted">Ontvangsten met delta’s of artikels die extra opvolging vragen.</div>
           <div id="deltaAlertsWrap" style="margin-top:12px;"></div>
         </div>
 
@@ -895,7 +904,7 @@
       <div id="tabNotifications" class="tab-panel">
         <div class="card">
           <h2>Meldingen</h2>
-          <div class="muted">Meldingen voor manager over ontvangsten, retouren, stocktellingen en opvolging.</div>
+          <div class="muted">Meldingen voor manager over ontvangsten, retouren en behoefte-uitgiftes.</div>
           <div id="notificationsWrap" style="margin-top:16px;"></div>
         </div>
       </div>
@@ -918,21 +927,17 @@
     </script>
 
     <script>
-      let warehouseData = null;
       let receiptsData = null;
       let returnsData = null;
       let needIssueData = null;
 
-      let selectedGroupKey = localStorage.getItem('manager_selected_group_key') || null;
       let selectedReceiptId = localStorage.getItem('manager_selected_receipt_id') || null;
       let selectedReturnId = localStorage.getItem('manager_selected_return_id') || null;
       let selectedNeedIssueId = localStorage.getItem('manager_selected_need_issue_id') || null;
       let selectedStockArticle = null;
-      let freezeSelectedRender = false;
-      let activeTab = localStorage.getItem('manager_active_tab') || 'deliveries';
+      let activeTab = localStorage.getItem('manager_active_tab') || 'overview';
       let lastUserInteractionAt = Date.now();
 
-      const REASONS = ['', 'Niet genoeg in stock', 'Teveel besteld', 'Andere reden'];
       const RECEIPT_REASONS = ['', 'Niet volledig geleverd', 'Beschadigd ontvangen', 'Verkeerd artikel / verpakking', 'Extra geleverd', 'Andere reden'];
       const RETURN_REASONS = ['Teveel besteld', 'NPC / beschadigde artikelen', 'Andere reden'];
 
@@ -983,7 +988,7 @@
       function openConfirm(message, onConfirm) {
         document.getElementById('confirmMessage').textContent = message || 'Bevestigen?';
         document.getElementById('confirmOverlay').style.display = 'flex';
-        document.getElementById('confirmOkBtn').onclick = function() {
+        document.getElementById('confirmOkBtn').onclick = function () {
           closeConfirm();
           if (typeof onConfirm === 'function') onConfirm();
         };
@@ -1040,7 +1045,7 @@
         activeTab = tabName;
         localStorage.setItem('manager_active_tab', tabName);
 
-        ['deliveries', 'receipts', 'returns', 'needissues', 'central', 'notifications'].forEach(name => {
+        ['overview', 'receipts', 'returns', 'needissues', 'central', 'notifications'].forEach(name => {
           const panel = document.getElementById('tab' + name.charAt(0).toUpperCase() + name.slice(1));
           const btn = document.getElementById('tab' + name.charAt(0).toUpperCase() + name.slice(1) + 'Btn');
           if (panel) panel.classList.toggle('active', name === tabName);
@@ -1070,94 +1075,18 @@
         return receipt.status || '';
       }
 
-      function renderReminder() {
-        const banner = document.getElementById('reminderBox');
-        banner.style.display = 'none';
-
-        const notifications = (warehouseData && warehouseData.notifications) || [];
-        const openNotification = notifications.find(n => String(n.status || '') === 'Open');
-
-        if (openNotification) {
-          banner.style.display = 'block';
-          banner.textContent = openNotification.titel || openNotification.bericht || 'Je hebt een open melding.';
-          return;
-        }
-
-        const alerts = (warehouseData && warehouseData.deltaCountAlerts) || [];
-        if (alerts.length) {
-          banner.style.display = 'block';
-          banner.textContent = `Er zijn ${alerts.length} gerichte teltaken voor artikelcodes met veel foutsignalen.`;
-        }
-      }
-
-      function manualRefresh() {
-        clearError();
-        loadAll(true);
-      }
-
       function clearSelection() {
-        selectedGroupKey = null;
         selectedReceiptId = null;
         selectedReturnId = null;
         selectedNeedIssueId = null;
 
-        localStorage.removeItem('manager_selected_group_key');
         localStorage.removeItem('manager_selected_receipt_id');
         localStorage.removeItem('manager_selected_return_id');
         localStorage.removeItem('manager_selected_need_issue_id');
 
-        renderSelectedEmpty();
         renderReceiptDetail(null);
         renderReturnDetail(null);
         renderNeedIssueDetail(null);
-        renderGroups((warehouseData && warehouseData.upcomingGroups) || []);
-      }
-
-      function getSelectedGroup() {
-        return ((warehouseData && warehouseData.upcomingGroups) || []).find(g => g.key === selectedGroupKey) || null;
-      }
-
-      function captureSelectedDraft() {
-        const group = getSelectedGroup();
-        if (!group) return null;
-
-        const draft = { key: selectedGroupKey, lines: {} };
-        group.lineItems.forEach(item => {
-          const cartEl = document.getElementById('cart-' + item.bestellingId);
-          const provEl = document.getElementById('prov-' + item.bestellingId);
-          const reasonEl = document.getElementById('reason-' + item.bestellingId);
-
-          if (cartEl || provEl || reasonEl) {
-            draft.lines[item.bestellingId] = {
-              inKarretje: cartEl ? cartEl.checked : (item.inKarretje === 'Ja'),
-              aantalDozenVoorzien: provEl ? Number(provEl.value || 0) : Number(item.aantalDozenVoorzien || 0),
-              redenDelta: reasonEl ? (reasonEl.value || '') : (item.redenDelta || '')
-            };
-          }
-        });
-
-        return draft;
-      }
-
-      function applySelectedDraft(draft) {
-        if (!draft || draft.key !== selectedGroupKey) return;
-
-        Object.keys(draft.lines || {}).forEach(orderId => {
-          const row = draft.lines[orderId];
-          const cartEl = document.getElementById('cart-' + orderId);
-          const provEl = document.getElementById('prov-' + orderId);
-          const reasonEl = document.getElementById('reason-' + orderId);
-
-          if (cartEl) cartEl.checked = !!row.inKarretje;
-          if (provEl) provEl.value = row.aantalDozenVoorzien;
-          if (reasonEl) reasonEl.value = row.redenDelta || '';
-
-          const currentGroup = getSelectedGroup();
-          if (currentGroup) {
-            const source = currentGroup.lineItems.find(x => x.bestellingId === orderId);
-            if (source) togglePreparationInputs(orderId, source.aantalDozen, true);
-          }
-        });
       }
 
       function serverCall(method, payload) {
@@ -1213,340 +1142,163 @@
     <script>
       function loadAll(fullRender) {
         if (!ensureSession()) return;
+        if (fullRender) showBusy('Managergegevens laden...');
 
-        loadWarehouse(fullRender, !!fullRender);
-        loadReceiptsSection(false);
-        loadReturnsSection(false);
-        loadNeedIssuesSection(false);
-        switchTab(activeTab);
-      }
-
-      function loadWarehouse(fullRender, useBusy) {
-        if (!ensureSession()) return;
-        if (useBusy) showBusy('Managergegevens laden...');
-
-        google.script.run
-          .withSuccessHandler(data => {
-            if (useBusy) hideBusy();
-            renderWarehouse(data, fullRender);
+        Promise.all([
+          new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(reject)
+              .getReceiptsData(SESSION_ID);
+          }),
+          new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(reject)
+              .getReturnsData(SESSION_ID);
+          }),
+          new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler(reject)
+              .getNeedIssueData(SESSION_ID);
           })
-          .withFailureHandler(err => {
-            if (useBusy) hideBusy();
-            showError(extractErrorMessage(err, 'Fout bij laden managergegevens.'), true);
-          })
-          .getWarehouseData(SESSION_ID);
+        ])
+        .then(([receipts, returns, needIssues]) => {
+          if (fullRender) hideBusy();
+
+          receiptsData = receipts || {};
+          returnsData = returns || {};
+          needIssueData = needIssues || {};
+
+          renderManagerDashboard();
+          renderReceiptsSection(receiptsData, false);
+          renderReturnsSection(returnsData, false);
+          renderNeedIssuesSection(needIssueData, false);
+          switchTab(activeTab);
+        })
+        .catch(err => {
+          if (fullRender) hideBusy();
+          showError(extractErrorMessage(err, 'Fout bij laden managergegevens.'), true);
+        });
       }
 
-      function loadReceiptsSection(skipDetailRefresh) {
-        if (!ensureSession()) return;
-
-        google.script.run
-          .withSuccessHandler(data => renderReceiptsSection(data, !!skipDetailRefresh))
-          .withFailureHandler(err => showError(extractErrorMessage(err, 'Fout bij laden ontvangsten.'), true))
-          .getReceiptsData(SESSION_ID);
-      }
-
-      function loadReturnsSection(skipDetailRefresh) {
-        if (!ensureSession()) return;
-
-        google.script.run
-          .withSuccessHandler(data => renderReturnsSection(data, !!skipDetailRefresh))
-          .withFailureHandler(err => showError(extractErrorMessage(err, 'Fout bij laden retouren.'), true))
-          .getReturnsData(SESSION_ID);
-      }
-
-      function loadNeedIssuesSection(skipDetailRefresh) {
-        if (!ensureSession()) return;
-
-        google.script.run
-          .withSuccessHandler(data => renderNeedIssuesSection(data, !!skipDetailRefresh))
-          .withFailureHandler(err => showError(extractErrorMessage(err, 'Fout bij laden behoefte-uitgiftes.'), true))
-          .getNeedIssueData(SESSION_ID);
+      function manualRefresh() {
+        clearError();
+        loadAll(true);
       }
     </script>
 
     <script>
-      function renderWarehouse(data, fullRender) {
-        warehouseData = data;
-        renderStats(data.stats || {}, data.notifications || []);
-        renderGroups(data.upcomingGroups || []);
-        renderDeltaAlerts(data.deltaCountAlerts || []);
-        renderBusStockTable(data.busStock || []);
-        renderNotifications(data.notifications || []);
-        renderReminder();
+      function renderManagerDashboard() {
+        const receipts = (receiptsData && receiptsData.receipts) || [];
+        const returns = (returnsData && returnsData.returns) || [];
+        const needIssues = (needIssueData && needIssueData.issues) || [];
+        const centralWarehouse = (needIssueData && needIssueData.centralWarehouse) || [];
+        const busStock = (needIssueData && needIssueData.busStock) || [];
 
-        if (!fullRender) return;
+        const openNotifications =
+          receipts.filter(x => String(x.status || '') !== 'Goedgekeurd').length +
+          returns.filter(x => String(x.status || '') !== 'Goedgekeurd').length +
+          needIssues.filter(x => String(x.status || '') !== 'Geboekt').length;
 
-        const groups = data.upcomingGroups || [];
-        if (!groups.length) {
-          renderSelectedEmpty();
-          return;
-        }
-
-        let selectedGroup = groups.find(g => g.key === selectedGroupKey);
-        if (!selectedGroup) {
-          selectedGroup = groups[0];
-          selectedGroupKey = selectedGroup.key;
-          localStorage.setItem('manager_selected_group_key', selectedGroupKey);
-        }
-
-        renderSelectedGroup(selectedGroup);
-      }
-
-      function renderStats(stats, notifications) {
-        const openNotifications = (notifications || []).filter(x => String(x.status || '') === 'Open').length;
-        const el = document.getElementById('stats');
-        el.innerHTML = `
-          <div class="stat"><div class="label">Open lijnen</div><div class="value">${stats.open || 0}</div></div>
-          <div class="stat"><div class="label">Klaargezet</div><div class="value">${stats.klaargezet || 0}</div></div>
-          <div class="stat"><div class="label">Niet afgehaald</div><div class="value">${stats.nietAfgehaald || 0}</div></div>
-          <div class="stat"><div class="label">Vandaag</div><div class="value">${stats.vandaag || 0}</div></div>
-          <div class="stat"><div class="label">Teltaken</div><div class="value">${stats.telAlerts || 0}</div></div>
-          <div class="stat"><div class="label">Open meldingen</div><div class="value">${openNotifications}</div></div>
-        `;
-      }
-
-      function renderGroups(groups) {
-        const body = document.getElementById('groupsBody');
-        if (!body) return;
-
-        if (!groups.length) {
-          body.innerHTML = `<tr><td colspan="5" class="muted">Geen beleveringsmomenten in de komende 7 dagen.</td></tr>`;
-          return;
-        }
-
-        body.innerHTML = groups.map(group => `
-          <tr class="${group.key === selectedGroupKey ? 'selected-row' : ''}">
-            <td>${group.techniekerNaam}</td>
-            <td>${group.klaarTegenLabel}</td>
-            <td><span class="status-badge ${statusClass(group.groupStatus)}">${group.groupStatus}</span></td>
-            <td class="right">${group.aantalLijnen}</td>
-            <td><button class="btn-light" onclick="selectGroup('${escapeJs(group.key)}')">Open</button></td>
-          </tr>
-        `).join('');
-      }
-
-      function selectGroup(groupKey) {
-        selectedGroupKey = groupKey;
-        localStorage.setItem('manager_selected_group_key', selectedGroupKey);
-        renderGroups((warehouseData && warehouseData.upcomingGroups) || []);
-        const group = ((warehouseData && warehouseData.upcomingGroups) || []).find(g => g.key === groupKey);
-        renderSelectedGroup(group);
-        switchTab('deliveries');
-      }
-
-      function renderSelectedEmpty() {
-        document.getElementById('selectedInfo').textContent = 'Nog geen beleveringsmoment geselecteerd.';
-        document.getElementById('selectedLinesBody').innerHTML = `<tr><td colspan="7" class="muted">Geen gegevens.</td></tr>`;
-
-        const readyBtn = document.getElementById('readyBtn');
-        const dispatchBtn = document.getElementById('dispatchBtn');
-
-        readyBtn.disabled = true;
-        readyBtn.className = 'btn-light';
-        dispatchBtn.disabled = true;
-        dispatchBtn.className = 'btn-light';
-      }
-
-      function renderSelectedGroup(group) {
-        if (!group) {
-          renderSelectedEmpty();
-          return;
-        }
-
-        selectedGroupKey = group.key;
-        localStorage.setItem('manager_selected_group_key', selectedGroupKey);
-
-        document.getElementById('selectedInfo').innerHTML = `
-          <span class="pill">${group.techniekerNaam}</span>
-          <span class="pill">${group.klaarTegenLabel}</span>
-          <span class="pill">Status: ${group.groupStatus}</span>
-          <span class="pill">Lijnen: ${group.aantalLijnen}</span>
-        `;
-
-        const isLocked = group.groupStatus === 'Klaargezet' || group.groupStatus === 'Meegegeven' || group.groupStatus === 'Goedgekeurd';
-        const canDispatch = group.groupStatus === 'Klaargezet';
-
-        const readyBtn = document.getElementById('readyBtn');
-        const dispatchBtn = document.getElementById('dispatchBtn');
-
-        readyBtn.disabled = isLocked;
-        readyBtn.className = group.groupStatus === 'Klaargezet' ? 'btn-green' : '';
-        readyBtn.textContent = 'Klaargezet';
-
-        dispatchBtn.disabled = !canDispatch;
-        dispatchBtn.className = group.groupStatus === 'Meegegeven' ? 'btn-green' : '';
-        dispatchBtn.textContent = 'Meegegeven';
-
-        const rows = group.lineItems.map(item => {
-          const checked = item.inKarretje === 'Ja';
-          const currentProvided = checked ? item.aantalDozen : item.aantalDozenVoorzien;
-          const currentDelta = Math.max(Number(item.aantalDozen || 0) - Number(currentProvided || 0), 0);
-
-          return `
-            <tr class="${currentDelta > 0 ? 'delta-row' : ''}">
-              <td>${item.artikelCode}</td>
-              <td>${item.artikelOmschrijving}</td>
-              <td class="right">${item.aantalDozen}</td>
-              <td><input type="checkbox" id="cart-${item.bestellingId}" ${checked ? 'checked' : ''} ${isLocked ? 'disabled' : ''} onchange="togglePreparationInputs('${item.bestellingId}', ${item.aantalDozen})"></td>
-              <td class="right"><input class="line-input" type="number" min="0" max="${item.aantalDozen}" step="1" id="prov-${item.bestellingId}" value="${currentProvided}" ${checked || isLocked ? 'disabled' : ''} oninput="updateLinePreview('${item.bestellingId}', ${item.aantalDozen})"></td>
-              <td class="right"><span id="delta-${item.bestellingId}">${currentDelta}</span></td>
-              <td><select class="line-select" id="reason-${item.bestellingId}" ${checked || isLocked ? 'disabled' : ''}>${REASONS.map(reason => `<option value="${reason}" ${item.redenDelta === reason ? 'selected' : ''}>${reason || '-- kies reden --'}</option>`).join('')}</select></td>
-            </tr>
-          `;
-        }).join('');
-
-        document.getElementById('selectedLinesBody').innerHTML = rows || `<tr><td colspan="7" class="muted">Geen lijnen.</td></tr>`;
-      }
-
-      function togglePreparationInputs(orderId, gevraagdDozen, silentRestore) {
-        const checked = document.getElementById('cart-' + orderId).checked;
-        const prov = document.getElementById('prov-' + orderId);
-        const reason = document.getElementById('reason-' + orderId);
-
-        if (checked) {
-          prov.value = gevraagdDozen;
-          prov.disabled = true;
-          reason.value = '';
-          reason.disabled = true;
-        } else {
-          if (Number(prov.value) >= gevraagdDozen) prov.value = Math.max(gevraagdDozen - 1, 0);
-          prov.disabled = false;
-          reason.disabled = false;
-        }
-
-        updateLinePreview(orderId, gevraagdDozen);
-        if (!silentRestore) freezeSelectedRender = true;
-      }
-
-      function updateLinePreview(orderId, gevraagdDozen) {
-        const prov = document.getElementById('prov-' + orderId);
-        const deltaEl = document.getElementById('delta-' + orderId);
-        const provided = Number(prov.value || 0);
-        const delta = Math.max(gevraagdDozen - provided, 0);
-        if (deltaEl) deltaEl.textContent = delta;
-        freezeSelectedRender = true;
-      }
-
-      function collectSelectedGroupLines(group) {
-        return group.lineItems.map(item => ({
-          orderId: item.bestellingId,
-          inKarretje: document.getElementById('cart-' + item.bestellingId)?.checked || false,
-          aantalDozenVoorzien: Number(document.getElementById('prov-' + item.bestellingId)?.value || 0),
-          redenDelta: document.getElementById('reason-' + item.bestellingId)?.value || ''
-        }));
-      }
-
-      function validateSelectedGroupLines(group, lines) {
-        for (const line of lines) {
-          const source = group.lineItems.find(item => item.bestellingId === line.orderId);
-          if (!source) continue;
-
-          const gevraagd = Number(source.aantalDozen || 0);
-          if (line.inKarretje) continue;
-
-          if (line.aantalDozenVoorzien < 0) return 'Voorzien aantal mag niet negatief zijn.';
-          if (line.aantalDozenVoorzien >= gevraagd) return `Bij artikel ${source.artikelCode} moet voorzien lager zijn dan gevraagd als je niet afvinkt.`;
-          if (!line.redenDelta) return `Kies een reden voor artikel ${source.artikelCode}.`;
-          if (!REASONS.includes(line.redenDelta)) return `Ongeldige reden bij artikel ${source.artikelCode}.`;
-        }
-        return '';
-      }
-
-      async function savePreparationAndThen(status, note) {
-        clearError();
-        if (!ensureSession()) return;
-
-        const group = getSelectedGroup();
-        if (!group) {
-          showError('Geen beleveringsmoment geselecteerd.');
-          return;
-        }
-
-        const actor = document.getElementById('actorInput').value || 'Manager';
-        const lines = collectSelectedGroupLines(group);
-        const validationError = validateSelectedGroupLines(group, lines);
-
-        if (validationError) {
-          showError(validationError);
-          return;
-        }
-
-        document.getElementById('readyBtn').disabled = true;
-        document.getElementById('dispatchBtn').disabled = true;
-        document.getElementById('notPickedBtn').disabled = true;
-        showBusy('Voorbereiding en status opslaan...');
-
-        try {
-          await serverCall('savePreparationBatch', withSession({ actor, lines }));
-          const result = await serverCall('updateWarehouseGroupStatus', withSession({
-            orderIds: group.orderIds,
-            status,
-            actor,
-            note: note || ''
-          }));
-
-          hideBusy();
-          freezeSelectedRender = false;
-          showSuccess(`${result.message} (${result.updated} lijnen)`);
-          loadWarehouse(true, false);
-        } catch (err) {
-          hideBusy();
-          showError(extractErrorMessage(err, 'Fout bij opslaan voorbereiding/status.'), true);
-        } finally {
-          document.getElementById('readyBtn').disabled = false;
-          document.getElementById('dispatchBtn').disabled = false;
-          document.getElementById('notPickedBtn').disabled = false;
-        }
-      }
-
-      function saveAndSetGroupStatus(status) {
-        const label = status === 'Klaargezet' ? 'belevering op Klaargezet zetten' : 'belevering op Meegegeven zetten';
-        openConfirm(`Bevestig: ${label}?`, () => savePreparationAndThen(status, ''));
-      }
-
-      function saveAndSetNotPicked() {
-        const note = prompt('Opmerking voor niet afgehaald:', 'Niet afgehaald');
-        if (note === null) return;
-        openConfirm('Bevestig: belevering op Niet afgehaald zetten?', () => savePreparationAndThen('Niet afgehaald', note || 'Niet afgehaald'));
-      }
-
-      function exportSelectedCsv() {
-        const group = getSelectedGroup();
-        if (!group) {
-          showError('Geen beleveringsmoment geselecteerd.');
-          return;
-        }
-
-        const currentLines = collectSelectedGroupLines(group);
-        const currentMap = {};
-        currentLines.forEach(line => { currentMap[line.orderId] = line; });
-
-        const lines = [];
-        lines.push(['Technieker', group.techniekerNaam]);
-        lines.push(['Klaar tegen', group.klaarTegenLabel]);
-        lines.push([]);
-        lines.push(['ArtikelNr', 'Artikel', 'Gevraagd dozen', 'Voorzien dozen', 'Delta dozen', 'Reden delta']);
-
-        group.lineItems.forEach(item => {
-          const current = currentMap[item.bestellingId] || {};
-          const checked = !!current.inKarretje;
-          const provided = checked ? Number(item.aantalDozen || 0) : Number(current.aantalDozenVoorzien || 0);
-          const delta = Math.max(Number(item.aantalDozen || 0) - provided, 0);
-          const reason = checked ? '' : (current.redenDelta || '');
-          lines.push([item.artikelCode, item.artikelOmschrijving, item.aantalDozen, provided, delta, reason]);
+        renderStats({
+          openReceipts: receipts.filter(x => String(x.status || '') !== 'Goedgekeurd').length,
+          openReturns: returns.filter(x => String(x.status || '') !== 'Goedgekeurd').length,
+          openNeedIssues: needIssues.filter(x => String(x.status || '') !== 'Geboekt').length,
+          centralArticles: centralWarehouse.length,
+          busLines: busStock.length,
+          openNotifications
         });
 
-        const csv = lines.map(row => row.map(cell => `"${String(cell || '').replace(/"/g, '""')}"`).join(';')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `managerbon_${group.techniekerCode}_${group.klaarTegenSort.replace(/[: ]/g, '_')}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        renderOverview();
+        renderDeltaAlertsFromData();
+        renderNotificationsFromData();
+        renderCentralWarehouseTable(centralWarehouse);
+        renderBusStockTable(busStock);
+        renderReminder();
+      }
+
+      function renderStats(stats) {
+        const el = document.getElementById('stats');
+        el.innerHTML = `
+          <div class="stat"><div class="label">Open ontvangsten</div><div class="value">${stats.openReceipts || 0}</div></div>
+          <div class="stat"><div class="label">Open retouren</div><div class="value">${stats.openReturns || 0}</div></div>
+          <div class="stat"><div class="label">Open behoefte-uitgiftes</div><div class="value">${stats.openNeedIssues || 0}</div></div>
+          <div class="stat"><div class="label">Artikels centraal</div><div class="value">${stats.centralArticles || 0}</div></div>
+          <div class="stat"><div class="label">Busstock lijnen</div><div class="value">${stats.busLines || 0}</div></div>
+          <div class="stat"><div class="label">Open meldingen</div><div class="value">${stats.openNotifications || 0}</div></div>
+        `;
+      }
+
+      function renderOverview() {
+        const receipts = ((receiptsData && receiptsData.receipts) || []).filter(x => String(x.status || '') !== 'Goedgekeurd');
+        const returns = ((returnsData && returnsData.returns) || []).filter(x => String(x.status || '') !== 'Goedgekeurd');
+        const needIssues = ((needIssueData && needIssueData.issues) || []).filter(x => String(x.status || '') !== 'Geboekt');
+
+        document.getElementById('overviewReceiptsBody').innerHTML = receipts.length
+          ? receipts.slice(0, 10).map(item => `
+              <tr>
+                <td>${item.ontvangstId}</td>
+                <td>${item.typeMateriaal || ''}</td>
+                <td><span class="status-badge ${statusClass(getReceiptUiStatus(item))}">${getReceiptUiStatus(item)}</span></td>
+                <td class="right">${item.lineCount || 0}</td>
+                <td class="right">${item.deltaCount || 0}</td>
+                <td><button class="btn-light" onclick="selectReceipt('${item.ontvangstId}');switchTab('receipts');">Open</button></td>
+              </tr>
+            `).join('')
+          : `<tr><td colspan="6" class="muted">Geen open ontvangsten.</td></tr>`;
+
+        document.getElementById('overviewReturnsBody').innerHTML = returns.length
+          ? returns.slice(0, 10).map(item => `
+              <tr>
+                <td>${item.retourId}</td>
+                <td>${item.techniekerNaam || item.techniekerCode || ''}</td>
+                <td><span class="status-badge ${statusClass(item.status)}">${item.status || ''}</span></td>
+                <td class="right">${item.lineCount || 0}</td>
+                <td><button class="btn-light" onclick="selectReturn('${item.retourId}');switchTab('returns');">Open</button></td>
+              </tr>
+            `).join('')
+          : `<tr><td colspan="5" class="muted">Geen open retouren.</td></tr>`;
+
+        document.getElementById('overviewNeedIssuesBody').innerHTML = needIssues.length
+          ? needIssues.slice(0, 10).map(item => `
+              <tr>
+                <td>${item.uitgifteId}</td>
+                <td>${item.techniekerNaam || ''}</td>
+                <td>${item.documentDatum || ''}</td>
+                <td><span class="status-badge ${statusClass(item.status)}">${item.status || ''}</span></td>
+                <td>${item.reden || ''}</td>
+                <td class="right">${item.lineCount || 0}</td>
+                <td><button class="btn-light" onclick="selectNeedIssue('${item.uitgifteId}');switchTab('needissues');">Open</button></td>
+              </tr>
+            `).join('')
+          : `<tr><td colspan="7" class="muted">Geen open behoefte-uitgiftes.</td></tr>`;
+      }
+
+      function renderReminder() {
+        const banner = document.getElementById('reminderBox');
+        banner.style.display = 'none';
+
+        const openReceipt = ((receiptsData && receiptsData.receipts) || []).find(x => String(x.status || '') === 'Ingediend');
+        if (openReceipt) {
+          banner.style.display = 'block';
+          banner.textContent = `Ontvangst ${openReceipt.ontvangstId} wacht op opvolging.`;
+          return;
+        }
+
+        const openReturn = ((returnsData && returnsData.returns) || []).find(x => String(x.status || '') === 'Ingediend');
+        if (openReturn) {
+          banner.style.display = 'block';
+          banner.textContent = `Retour ${openReturn.retourId} wacht op opvolging.`;
+          return;
+        }
+
+        const deltaReceipt = ((receiptsData && receiptsData.receipts) || []).find(x => Number(x.deltaCount || 0) > 0);
+        if (deltaReceipt) {
+          banner.style.display = 'block';
+          banner.textContent = `Er zijn ontvangsten met delta’s die extra aandacht vragen.`;
+        }
       }
     </script>
 
@@ -1554,7 +1306,6 @@
       function renderReceiptsSection(data, skipDetailRefresh) {
         receiptsData = data;
         renderReceiptsList(data.receipts || []);
-        renderCentralWarehouseTable(data.centralWarehouse || []);
 
         if (selectedReceiptId) {
           const receipt = (data.receipts || []).find(r => r.ontvangstId === selectedReceiptId);
@@ -1602,7 +1353,6 @@
         const receipt = ((receiptsData && receiptsData.receipts) || []).find(r => r.ontvangstId === receiptId);
         renderReceiptsList(receiptsData.receipts || []);
         renderReceiptDetail(receipt || null);
-        switchTab('receipts');
       }
 
       function renderReceiptDetail(receipt) {
@@ -1716,7 +1466,7 @@
             showSuccess(result.message);
             selectedReceiptId = result.ontvangstId;
             localStorage.setItem('manager_selected_receipt_id', selectedReceiptId);
-            loadReceiptsSection(false);
+            loadAll(false);
             switchTab('receipts');
           }
         });
@@ -1824,7 +1574,7 @@
           fallbackErrorMessage: 'Fout bij opslaan ontvangstlijnen.',
           onSuccess: result => {
             showSuccess(result.message);
-            loadReceiptsSection(false);
+            loadAll(false);
           }
         });
       }
@@ -1864,8 +1614,7 @@
           submitBtn.disabled = false;
           submitBtn.textContent = originalText;
           showSuccess(result.message);
-          loadReceiptsSection(false);
-          loadWarehouse(false, false);
+          loadAll(false);
         } catch (err) {
           hideBusy();
           submitBtn.disabled = false;
@@ -1933,7 +1682,6 @@
         const retour = ((returnsData && returnsData.returns) || []).find(r => r.retourId === retourId);
         renderReturnsList(returnsData.returns || []);
         renderReturnDetail(retour || null);
-        switchTab('returns');
       }
 
       function createReturnFlow() {
@@ -1967,7 +1715,7 @@
             showSuccess(result.message);
             selectedReturnId = result.retourId;
             localStorage.setItem('manager_selected_return_id', selectedReturnId);
-            loadReturnsSection(false);
+            loadAll(false);
           }
         });
       }
@@ -2132,7 +1880,7 @@
           fallbackErrorMessage: 'Fout bij opslaan retourlijnen.',
           onSuccess: result => {
             showSuccess(result.message);
-            loadReturnsSection(false);
+            loadAll(false);
           }
         });
       }
@@ -2171,9 +1919,7 @@
           submitBtn.disabled = false;
           submitBtn.textContent = originalText;
           showSuccess(result.message);
-          loadReturnsSection(false);
-          loadWarehouse(false, false);
-          loadNeedIssuesSection(false);
+          loadAll(false);
         } catch (err) {
           hideBusy();
           submitBtn.disabled = false;
@@ -2188,8 +1934,6 @@
         needIssueData = data;
         renderNeedIssueTechnicians(data.technicians || []);
         renderNeedIssueList(data.issues || []);
-        renderCentralWarehouseTable(data.centralWarehouse || []);
-        renderBusStockTable(data.busStock || []);
 
         if (selectedNeedIssueId) {
           const issue = (data.issues || []).find(r => r.uitgifteId === selectedNeedIssueId);
@@ -2244,7 +1988,6 @@
         const issue = ((needIssueData && needIssueData.issues) || []).find(r => r.uitgifteId === uitgifteId);
         renderNeedIssueList(needIssueData.issues || []);
         renderNeedIssueDetail(issue || null);
-        switchTab('needissues');
       }
 
       function createNeedIssueFlow() {
@@ -2284,7 +2027,7 @@
             showSuccess(result.message);
             selectedNeedIssueId = result.uitgifteId;
             localStorage.setItem('manager_selected_need_issue_id', selectedNeedIssueId);
-            loadNeedIssuesSection(false);
+            loadAll(false);
             switchTab('needissues');
           }
         });
@@ -2440,7 +2183,7 @@
           fallbackErrorMessage: 'Fout bij opslaan uitgiftelijnen.',
           onSuccess: result => {
             showSuccess(result.message);
-            loadNeedIssuesSection(false);
+            loadAll(false);
           }
         });
       }
@@ -2479,10 +2222,7 @@
           bookBtn.disabled = false;
           bookBtn.textContent = originalText;
           showSuccess(result.message);
-          loadNeedIssuesSection(false);
-          loadWarehouse(false, false);
-          loadReceiptsSection(false);
-          loadReturnsSection(false);
+          loadAll(false);
         } catch (err) {
           hideBusy();
           bookBtn.disabled = false;
@@ -2536,12 +2276,14 @@
         `).join('');
       }
 
-      function renderDeltaAlerts(alerts) {
+      function renderDeltaAlertsFromData() {
         const el = document.getElementById('deltaAlertsWrap');
         if (!el) return;
 
-        if (!alerts.length) {
-          el.innerHTML = '<div class="empty-state">Geen gerichte teltaken op dit moment.</div>';
+        const receiptsWithDelta = ((receiptsData && receiptsData.receipts) || []).filter(x => Number(x.deltaCount || 0) > 0);
+
+        if (!receiptsWithDelta.length) {
+          el.innerHTML = '<div class="empty-state">Geen delta-signalen op dit moment.</div>';
           return;
         }
 
@@ -2550,29 +2292,23 @@
             <table>
               <thead>
                 <tr>
-                  <th>ArtikelNr</th>
-                  <th>Artikel</th>
-                  <th class="right">Signalen</th>
-                  <th class="right">Impact</th>
-                  <th class="right">Grabbel</th>
-                  <th class="right">Ontvangst</th>
-                  <th class="right">Stock centraal</th>
-                  <th>Referenties</th>
+                  <th>OntvangstID</th>
+                  <th>Type</th>
+                  <th>Bestelbon</th>
+                  <th>Status</th>
+                  <th class="right">Delta</th>
                   <th>Actie</th>
                 </tr>
               </thead>
               <tbody>
-                ${alerts.map(item => `
+                ${receiptsWithDelta.map(item => `
                   <tr class="alert-row">
-                    <td>${item.artikelCode}</td>
-                    <td>${item.artikelOmschrijving}</td>
-                    <td class="right">${item.signalCount}</td>
-                    <td class="right">${item.qtyImpact}</td>
-                    <td class="right">${item.grabbelDeltaCount}</td>
-                    <td class="right">${item.receiptDeltaCount}</td>
-                    <td class="right">${item.currentCentralStock}</td>
-                    <td>${(item.refs || []).join(', ')}</td>
-                    <td><button class="btn-light" onclick="createTargetedBusCountFromAlert('${escapeJs(item.artikelCode)}')">Gerichte telling</button></td>
+                    <td>${item.ontvangstId}</td>
+                    <td>${item.typeMateriaal || ''}</td>
+                    <td>${item.bestelbonNr || ''}</td>
+                    <td><span class="status-badge ${statusClass(getReceiptUiStatus(item))}">${getReceiptUiStatus(item)}</span></td>
+                    <td class="right">${item.deltaCount || 0}</td>
+                    <td><button class="btn-light" onclick="selectReceipt('${item.ontvangstId}');switchTab('receipts');">Open ontvangst</button></td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -2614,42 +2350,7 @@
           fallbackErrorMessage: 'Fout bij aanmaken busstocktelling.',
           onSuccess: result => {
             showSuccess(result.message);
-            loadWarehouse(false, false);
-          }
-        });
-      }
-
-      function createTargetedBusCountFromAlert(artikelCode) {
-        openConfirm(`Gerichte telling aanvragen voor artikel ${artikelCode}?`, () => executeCreateTargetedBusCountFromAlert(artikelCode));
-      }
-
-      async function executeCreateTargetedBusCountFromAlert(artikelCode) {
-        const techniekerCode = document.getElementById('busCountTech').value || '';
-        const documentDatum = document.getElementById('busCountDate').value || '';
-
-        if (!techniekerCode) {
-          showError('Kies eerst een technieker voor de gerichte telling.');
-          return;
-        }
-        if (!documentDatum) {
-          showError('Kies eerst een documentdatum.');
-          return;
-        }
-
-        await runAction({
-          busyMessage: 'Gerichte telling aanvragen...',
-          method: 'createBusCountRequestFromAlert',
-          payload: withSession({
-            techniekerCode,
-            documentDatum,
-            actor: document.getElementById('actorInput').value || 'Manager',
-            artikelCode,
-            reden: 'Gerichte telling op basis van delta-signalen'
-          }),
-          fallbackErrorMessage: 'Fout bij aanmaken gerichte telling.',
-          onSuccess: result => {
-            showSuccess(result.message);
-            loadWarehouse(false, false);
+            loadAll(false);
           }
         });
       }
@@ -2752,17 +2453,49 @@
           fallbackErrorMessage: 'Fout bij manuele toevoeging.',
           onSuccess: result => {
             showSuccess(result.message);
-            loadReceiptsSection(false);
-            loadNeedIssuesSection(false);
-            loadReturnsSection(false);
-            loadWarehouse(false, false);
+            loadAll(false);
           }
         });
       }
 
-      function renderNotifications(notifications) {
+      function renderNotificationsFromData() {
         const wrap = document.getElementById('notificationsWrap');
         if (!wrap) return;
+
+        const notifications = [];
+
+        ((receiptsData && receiptsData.receipts) || [])
+          .filter(x => String(x.status || '') !== 'Goedgekeurd')
+          .forEach(x => {
+            notifications.push({
+              type: 'Ontvangst',
+              status: x.status || '',
+              titel: x.ontvangstId,
+              bericht: `Open ontvangst ${x.ontvangstId}${Number(x.deltaCount || 0) > 0 ? ` met ${x.deltaCount} delta('s)` : ''}.`
+            });
+          });
+
+        ((returnsData && returnsData.returns) || [])
+          .filter(x => String(x.status || '') !== 'Goedgekeurd')
+          .forEach(x => {
+            notifications.push({
+              type: 'Retour',
+              status: x.status || '',
+              titel: x.retourId,
+              bericht: `Open retour ${x.retourId} voor ${x.techniekerNaam || x.techniekerCode || ''}.`
+            });
+          });
+
+        ((needIssueData && needIssueData.issues) || [])
+          .filter(x => String(x.status || '') !== 'Geboekt')
+          .forEach(x => {
+            notifications.push({
+              type: 'Behoefte-uitgifte',
+              status: x.status || '',
+              titel: x.uitgifteId,
+              bericht: `Open behoefte-uitgifte ${x.uitgifteId} voor ${x.techniekerNaam || ''}.`
+            });
+          });
 
         if (!notifications.length) {
           wrap.innerHTML = '<div class="empty-state">Geen meldingen.</div>';
@@ -2774,35 +2507,11 @@
             <div>
               <span class="pill">${item.type || 'Melding'}</span>
               <span class="pill">${item.status || ''}</span>
-              ${item.aangemaaktOp ? `<span class="pill">${item.aangemaaktOp}</span>` : ''}
             </div>
             <div style="font-weight:700; margin-top:6px;">${item.titel || ''}</div>
             <div class="muted" style="margin-top:6px;">${item.bericht || ''}</div>
-            <div class="toolbar">
-              ${String(item.status || '') === 'Open'
-                ? `<button class="btn-light" onclick="markWarehouseNotificationAsRead('${item.notificatieId}')">Markeer als gelezen</button>`
-                : ''
-              }
-            </div>
           </div>
         `).join('');
-      }
-
-      function markWarehouseNotificationAsRead(notificatieId) {
-        if (!notificatieId) return;
-        openConfirm('Melding markeren als gelezen?', () => executeMarkWarehouseNotificationAsRead(notificatieId));
-      }
-
-      async function executeMarkWarehouseNotificationAsRead(notificatieId) {
-        await runAction({
-          busyMessage: 'Melding markeren...',
-          method: 'markNotificationRead',
-          payload: withSession({ notificatieId }),
-          fallbackErrorMessage: 'Fout bij markeren melding.',
-          onSuccess: () => {
-            loadWarehouse(false, false);
-          }
-        });
       }
     </script>
 
@@ -2826,40 +2535,7 @@
 
         if (!ensureSession()) return;
 
-        if (!freezeSelectedRender) {
-          loadWarehouse(false, false);
-        } else {
-          const draft = captureSelectedDraft();
-
-          google.script.run
-            .withSuccessHandler(data => {
-              warehouseData = data;
-              renderStats(data.stats || {}, data.notifications || []);
-              renderGroups(data.upcomingGroups || []);
-              renderDeltaAlerts(data.deltaCountAlerts || []);
-              renderBusStockTable(data.busStock || []);
-              renderNotifications(data.notifications || []);
-              renderReminder();
-
-              const selected = (data.upcomingGroups || []).find(g => g.key === selectedGroupKey);
-              if (selected) {
-                renderSelectedGroup(selected);
-                applySelectedDraft(draft);
-              } else {
-                renderSelectedEmpty();
-              }
-            })
-            .withFailureHandler(() => {})
-            .getWarehouseData(SESSION_ID);
-        }
-
-        const skipReceiptDetailRefresh = activeTab === 'receipts' && !!selectedReceiptId;
-        const skipReturnDetailRefresh = activeTab === 'returns' && !!selectedReturnId;
-        const skipNeedIssueDetailRefresh = activeTab === 'needissues' && !!selectedNeedIssueId;
-
-        loadReceiptsSection(skipReceiptDetailRefresh);
-        loadReturnsSection(skipReturnDetailRefresh);
-        loadNeedIssuesSection(skipNeedIssueDetailRefresh);
+        loadAll(false);
       }, 30000);
 
       initManagerApp();
