@@ -1,9 +1,96 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<script>
+  function renderTechBusCountData(data) {
+    APP_STATE.techBusCountData = data || {};
+    renderOpenBusCounts((data && data.openCounts) || []);
+
+    const selectedId = APP_STATE.selectedBusCountId;
+    const selected = ((data && data.openCounts) || []).find(x => x.busCountId === selectedId) || null;
+    renderSelectedBusCount(selected);
+  }
+
+  function renderOpenBusCounts(rows) {
+    const body = document.getElementById('openBusCountsBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5" class="muted">Geen openstaande tellingen.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map(row => `
+      <tr class="${row.busCountId === APP_STATE.selectedBusCountId ? 'selected-row' : ''}">
+        <td>${row.busCountId || ''}</td>
+        <td>${row.documentDatum || ''}</td>
+        <td>${row.reden || ''}</td>
+        <td>${row.status || ''}</td>
+        <td><button class="btn-light" onclick="selectBusCount('${escapeJs(row.busCountId)}')">Open</button></td>
+      </tr>
+    `).join('');
+  }
+
+  function selectBusCount(busCountId) {
+    APP_STATE.selectedBusCountId = busCountId;
+    const selected = ((APP_STATE.techBusCountData && APP_STATE.techBusCountData.openCounts) || []).find(x => x.busCountId === busCountId) || null;
+    renderOpenBusCounts((APP_STATE.techBusCountData && APP_STATE.techBusCountData.openCounts) || []);
+    renderSelectedBusCount(selected);
+    switchTechTab('buscount');
+  }
+
+  function renderSelectedBusCount(item) {
+    const info = document.getElementById('selectedBusCountInfo');
+    const body = document.getElementById('selectedBusCountLinesBody');
+
+    if (!info || !body) return;
+
+    if (!item) {
+      info.textContent = 'Nog geen telling geselecteerd.';
+      body.innerHTML = `<tr><td colspan="6" class="muted">Geen tellinglijnen.</td></tr>`;
+      return;
+    }
+
+    info.innerHTML = `
+      <span class="pill">${item.busCountId || ''}</span>
+      <span class="pill">${item.documentDatum || ''}</span>
+      <span class="pill">${item.reden || ''}</span>
+      <span class="pill">${item.status || ''}</span>
+    `;
+
+    body.innerHTML = (item.lines || []).map((line, idx) => `
+      <tr>
+        <td>${line.artikelCode || ''}</td>
+        <td>${line.artikelOmschrijving || ''}</td>
+        <td>${line.eenheid || ''}</td>
+        <td class="right">${line.systeemAantal || 0}</td>
+        <td class="right"><input type="number" min="0" step="1" value="${line.geteldAantal || 0}" data-buscount-row="${idx}" oninput="updateBusCountDelta(${idx}, ${line.systeemAantal || 0})"></td>
+        <td class="right"><span id="buscount-delta-${idx}">${(line.geteldAantal || 0) - (line.systeemAantal || 0)}</span></td>
+      </tr>
+    `).join('');
+  }
+
+  function updateBusCountDelta(idx, systeemAantal) {
+    const input = document.querySelector(`[data-buscount-row="${idx}"]`);
+    const deltaEl = document.getElementById(`buscount-delta-${idx}`);
+    if (!input || !deltaEl) return;
+    deltaEl.textContent = String(Number(input.value || 0) - Number(systeemAantal || 0));
+  }
+
+  function saveTechBusCount() {
+    openConfirm('Telling opslaan?', function () {
+      showBusy('Telling opslaan...');
+      setTimeout(function () {
+        hideBusy();
+        showSuccess('Telling opgeslagen.');
+      }, 200);
+    });
+  }
+
+  function submitTechBusCount() {
+    openConfirm('Telling indienen?', function () {
+      showBusy('Telling indienen...');
+      setTimeout(function () {
+        hideBusy();
+        showSuccess('Telling ingediend.');
+      }, 200);
+    });
+  }
+</script>

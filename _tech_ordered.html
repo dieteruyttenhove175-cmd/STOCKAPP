@@ -1,9 +1,75 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<div id="tabOrdered" class="tab-panel">
+  <div class="card">
+    <h2>Mijn grabbelstock leveringen</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Datum</th>
+            <th>Tijdslot</th>
+            <th>Status</th>
+            <th class="right">Lijnen</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="myDeliveriesBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Details geselecteerde levering</h2>
+    <div id="selectedTechDeliveryInfo" class="muted">Nog geen levering geselecteerd.</div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th class="right">Gevraagd dozen</th>
+            <th class="right">Voorzien dozen</th>
+            <th class="right">Delta dozen</th>
+            <th>Reden delta</th>
+            <th>Ontvangen OK</th>
+            <th class="right">Ontvangen dozen</th>
+            <th>Verschilreden</th>
+          </tr>
+        </thead>
+        <tbody id="selectedTechDeliveryLinesBody"></tbody>
+      </table>
+    </div>
+
+    <div class="toolbar">
+      <button id="confirmTechReceiptBtn" onclick="confirmTechReceipt()">Ontvangst bevestigen</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Bestaande bestelling aanpassen</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Verpakking</th>
+            <th class="right">Aantal dozen</th>
+            <th class="right">Totaal stuks</th>
+          </tr>
+        </thead>
+        <tbody id="existingOrderBody"></tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:12px;">
+      <label for="existingOrderNote">Extra uitleg</label>
+      <textarea id="existingOrderNote"></textarea>
+    </div>
+
+    <div class="toolbar">
+      <button id="updateOrderBtn" onclick="updateTechOrder()">Bestelling aanpassen</button>
+    </div>
+  </div>
+</div>

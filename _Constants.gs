@@ -52,6 +52,8 @@ const TABS = {
   MOBILE_REQUESTS : 'MobielMagazijnAanvragen',
   MOBILE_REQUEST_LINES : 'MobielMagazijnAanvraagLijnen',
 
+  
+
   MOBILE_WAREHOUSES : 'MobieleMagazijnen'
 };
 

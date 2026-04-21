@@ -1,9 +1,54 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<div class="card">
+  <h1 id="pageTitle"><?= model && model.pageTitle ? model.pageTitle : 'Dashboard' ?></h1>
+  <div class="muted" id="pageSubtitle"><?= model && model.pageSubtitle ? model.pageSubtitle : '' ?></div>
+</div>
+
+<div id="successBox" class="success"></div>
+<div id="errorBox" class="error"></div>
+<div id="reminderBox" class="banner"></div>
+
+<div id="popupOverlay">
+  <div id="popupBox">
+    <div id="popupMessage">Actie uitgevoerd</div>
+    <button onclick="closePopup()">OK</button>
+  </div>
+</div>
+
+<div id="confirmOverlay">
+  <div id="confirmBox">
+    <div id="confirmMessage">Bevestigen?</div>
+    <div id="confirmActions">
+      <button id="confirmOkBtn">Ja</button>
+      <button class="btn-light" onclick="closeConfirm()">Annuleren</button>
+    </div>
+  </div>
+</div>
+
+<div id="busyOverlay">
+  <div id="busyBox">
+    <div id="busyMessage">Backend bezig...</div>
+    <div class="muted">Even wachten</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="grid topbar">
+    <div>
+      <label for="actorInput"><?= model && model.actorLabel ? model.actorLabel : 'Naam gebruiker' ?></label>
+      <input id="actorInput" placeholder="<?= model && model.actorPlaceholder ? model.actorPlaceholder : 'Bijv. Dieter' ?>">
+    </div>
+    <button class="btn-light" id="refreshBtn" onclick="manualRefresh()">Vernieuwen</button>
+    <button class="btn-light" id="clearSelectionBtn" onclick="clearSelection()">Selectie wissen</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="tabs">
+    <button id="tabDeliveriesBtn" class="tab-btn active" onclick="switchTab('deliveries')">Grabbelstock beleveringen</button>
+    <button id="tabReceiptsBtn" class="tab-btn" onclick="switchTab('receipts')">Ontvangsten</button>
+    <button id="tabReturnsBtn" class="tab-btn" onclick="switchTab('returns')">Retouren</button>
+    <button id="tabNeedIssuesBtn" class="tab-btn" onclick="switchTab('needissues')">Behoefte-uitgiftes</button>
+    <button id="tabCentralBtn" class="tab-btn" onclick="switchTab('central')">Voorraad & tellingen</button>
+    <button id="tabNotificationsBtn" class="tab-btn" onclick="switchTab('notifications')">Meldingen</button>
+  </div>
+</div>

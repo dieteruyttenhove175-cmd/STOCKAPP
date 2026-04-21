@@ -1,9 +1,187 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<script>
+  function switchTechTab(tabName) {
+    const map = {
+      neworder: ['tabNewOrder', 'tabNewOrderBtn'],
+      ordered: ['tabOrdered', 'tabOrderedBtn'],
+      notifications: ['tabNotifications', 'tabNotificationsBtn'],
+      buscount: ['tabBusCount', 'tabBusCountBtn'],
+      mobile: ['tabMobile', 'tabMobileBtn']
+    };
+
+    APP_STATE.techActiveTab = tabName;
+
+    Object.keys(map).forEach(key => {
+      const panel = document.getElementById(map[key][0]);
+      const btn = document.getElementById(map[key][1]);
+      if (panel) panel.classList.toggle('active', key === tabName);
+      if (btn) btn.classList.toggle('active', key === tabName);
+    });
+  }
+
+  function renderTechDashboardData(data) {
+    APP_STATE.techDashboardData = data || {};
+
+    renderUpcomingDeliveries((data && data.upcomingDeliveries) || []);
+    renderNewOrderRows((data && data.newOrderLines) || []);
+    renderMyDeliveries((data && data.myDeliveries) || []);
+
+    const selectedDeliveryId = APP_STATE.selectedTechDeliveryId;
+    const selectedDelivery = ((data && data.myDeliveries) || []).find(x => x.deliveryId === selectedDeliveryId) || null;
+    renderSelectedTechDelivery(selectedDelivery);
+
+    renderExistingOrderRows((data && data.existingOrderLines) || []);
+  }
+
+  function renderUpcomingDeliveries(rows) {
+    const body = document.getElementById('upcomingDeliveriesBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="4" class="muted">Geen komende beleveringen.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map(row => `
+      <tr>
+        <td>${row.datum || ''}</td>
+        <td>${row.tijdslot || ''}</td>
+        <td>${row.status || ''}</td>
+        <td>${row.deadline || ''}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderNewOrderRows(rows) {
+    const body = document.getElementById('newOrderBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5" class="muted">Geen bestelregels beschikbaar.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map((row, idx) => `
+      <tr>
+        <td>${row.artikelCode || ''}</td>
+        <td>${row.artikelOmschrijving || ''}</td>
+        <td>${row.verpakking || ''}</td>
+        <td class="right"><input type="number" min="0" step="1" value="${row.aantalDozen || 0}" data-new-order-row="${idx}"></td>
+        <td class="right">${row.totaalStuks || 0}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderMyDeliveries(rows) {
+    const body = document.getElementById('myDeliveriesBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5" class="muted">Nog geen leveringen.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map(row => `
+      <tr class="${row.deliveryId === APP_STATE.selectedTechDeliveryId ? 'selected-row' : ''}">
+        <td>${row.datum || ''}</td>
+        <td>${row.tijdslot || ''}</td>
+        <td>${row.status || ''}</td>
+        <td class="right">${row.lineCount || 0}</td>
+        <td><button class="btn-light" onclick="selectTechDelivery('${escapeJs(row.deliveryId)}')">Open</button></td>
+      </tr>
+    `).join('');
+  }
+
+  function selectTechDelivery(deliveryId) {
+    APP_STATE.selectedTechDeliveryId = deliveryId;
+    const delivery = ((APP_STATE.techDashboardData && APP_STATE.techDashboardData.myDeliveries) || []).find(x => x.deliveryId === deliveryId) || null;
+    renderMyDeliveries((APP_STATE.techDashboardData && APP_STATE.techDashboardData.myDeliveries) || []);
+    renderSelectedTechDelivery(delivery);
+    switchTechTab('ordered');
+  }
+
+  function renderSelectedTechDelivery(delivery) {
+    const info = document.getElementById('selectedTechDeliveryInfo');
+    const body = document.getElementById('selectedTechDeliveryLinesBody');
+
+    if (!info || !body) return;
+
+    if (!delivery) {
+      info.textContent = 'Nog geen levering geselecteerd.';
+      body.innerHTML = `<tr><td colspan="9" class="muted">Geen gegevens.</td></tr>`;
+      return;
+    }
+
+    info.innerHTML = `
+      <span class="pill">${delivery.datum || ''}</span>
+      <span class="pill">${delivery.tijdslot || ''}</span>
+      <span class="pill">${delivery.status || ''}</span>
+    `;
+
+    body.innerHTML = (delivery.lines || []).map((line, idx) => `
+      <tr>
+        <td>${line.artikelCode || ''}</td>
+        <td>${line.artikelOmschrijving || ''}</td>
+        <td class="right">${line.gevraagdDozen || 0}</td>
+        <td class="right">${line.voorzienDozen || 0}</td>
+        <td class="right">${line.deltaDozen || 0}</td>
+        <td>${line.redenDelta || ''}</td>
+        <td><input type="checkbox" data-tech-receipt-ok="${idx}" ${line.ontvangenOk ? 'checked' : ''}></td>
+        <td class="right"><input type="number" min="0" step="1" value="${line.ontvangenDozen || 0}" data-tech-receipt-qty="${idx}"></td>
+        <td><input type="text" value="${line.verschilReden || ''}" data-tech-receipt-reason="${idx}"></td>
+      </tr>
+    `).join('');
+  }
+
+  function renderExistingOrderRows(rows) {
+    const body = document.getElementById('existingOrderBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5" class="muted">Geen bestaande bestelregels.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map((row, idx) => `
+      <tr>
+        <td>${row.artikelCode || ''}</td>
+        <td>${row.artikelOmschrijving || ''}</td>
+        <td>${row.verpakking || ''}</td>
+        <td class="right"><input type="number" min="0" step="1" value="${row.aantalDozen || 0}" data-existing-order-row="${idx}"></td>
+        <td class="right">${row.totaalStuks || 0}</td>
+      </tr>
+    `).join('');
+  }
+
+  function submitTechOrder() {
+    openConfirm('Bestelling doorsturen?', function () {
+      showBusy('Bestelling doorsturen...');
+      // Backend koppelen in volgende stap
+      setTimeout(function () {
+        hideBusy();
+        showSuccess('Bestelling doorgestuurd.');
+      }, 200);
+    });
+  }
+
+  function updateTechOrder() {
+    openConfirm('Bestelling aanpassen?', function () {
+      showBusy('Bestelling aanpassen...');
+      // Backend koppelen in volgende stap
+      setTimeout(function () {
+        hideBusy();
+        showSuccess('Bestelling aangepast.');
+      }, 200);
+    });
+  }
+
+  function confirmTechReceipt() {
+    openConfirm('Ontvangst bevestigen?', function () {
+      showBusy('Ontvangst bevestigen...');
+      // Backend koppelen in volgende stap
+      setTimeout(function () {
+        hideBusy();
+        showSuccess('Ontvangst bevestigd.');
+      }, 200);
+    });
+  }
+</script>

@@ -1,14 +1,15 @@
 /* =========================================================
-   15_WebApp.gs — webapp routing / template bootstrap
+   _WebApp.gs — webapp routing / template bootstrap
    ========================================================= */
 
 function getForbiddenOutput(message) {
   return HtmlService
     .createHtmlOutput(`
-## Geen toegang
-
-${String(message || 'Je hebt geen toegang tot deze pagina.')}
-`)
+      <div style="font-family:Arial,sans-serif;padding:24px;">
+        <h2>Geen toegang</h2>
+        <p>${String(message || 'Je hebt geen toegang tot deze pagina.')}</p>
+      </div>
+    `)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
@@ -70,6 +71,7 @@ function resolveTargetFileName(view, user) {
   if (requestedView === 'mobile') return 'MobileWarehouse';
 
   if (!user) return 'Index';
+
   if (user.rol === ROLE.WAREHOUSE) return 'Warehouse';
   if (user.rol === ROLE.MOBILE_WAREHOUSE) return 'MobileWarehouse';
   if (user.rol === ROLE.MANAGER || user.rol === ROLE.ANALYSIS) return 'Manager';
@@ -127,27 +129,55 @@ function assertPageAccess(fileName, user, techRef) {
 function buildPageTemplateContext(fileName, user, techRef, sessionId) {
   const authContext = buildAuthTemplateContext(user, sessionId);
 
-  const context = {
+  const baseContext = {
     techRef: safeText(techRef),
     ...authContext,
-
-    // Alleen voor eerste browser-bootstrap
     bootstrapSessionId: safeText(sessionId || '')
   };
 
-  if (fileName === 'Index') {
-    context.pageTitle = 'DigiQS Grabbelstock';
-  } else if (fileName === 'Warehouse') {
-    context.pageTitle = 'DigiQS Magazijn';
-  } else if (fileName === 'MobileWarehouse') {
-    context.pageTitle = 'DigiQS Mobiel Magazijn';
-  } else if (fileName === 'Manager') {
-    context.pageTitle = 'DigiQS Manager';
-  } else {
-    context.pageTitle = APP_CONFIG.DEFAULT_PAGE_TITLE || 'DigiQS Warehouse';
+  const sessionModel = {
+    userName: authContext.currentUserName || '',
+    userRole: authContext.currentUserRole || '',
+    authMode: authContext.currentAuthMode || '',
+    sessionId: safeText(sessionId || '')
+  };
+
+  if (fileName === 'Warehouse') {
+    return {
+      ...baseContext,
+      model: buildWarehouseViewModel(sessionModel),
+      pageTitle: 'DigiQS Magazijn'
+    };
   }
 
-  return context;
+  if (fileName === 'Manager') {
+    return {
+      ...baseContext,
+      model: buildManagerViewModel(sessionModel),
+      pageTitle: 'DigiQS Manager'
+    };
+  }
+
+  if (fileName === 'MobileWarehouse') {
+    return {
+      ...baseContext,
+      model: buildMobileWarehouseViewModel(sessionModel),
+      pageTitle: 'DigiQS Mobiel Magazijn'
+    };
+  }
+
+  if (fileName === 'Index') {
+    return {
+      ...baseContext,
+      model: buildTechnicianViewModel(sessionModel),
+      pageTitle: 'DigiQS Grabbelstock'
+    };
+  }
+
+  return {
+    ...baseContext,
+    pageTitle: APP_CONFIG.DEFAULT_PAGE_TITLE || 'DigiQS Warehouse'
+  };
 }
 
 function renderLoginPage(view, techRef, sid) {

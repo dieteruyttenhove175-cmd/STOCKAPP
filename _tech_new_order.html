@@ -1,9 +1,48 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<div id="tabNewOrder" class="tab-panel active">
+  <div class="card">
+    <h2>Komende geplande beleveringen</h2>
+    <div class="muted">De eerstvolgende 4 beleveringen. Ook beleveringen met verlopen deadline blijven zichtbaar tot en met de beleverdag zelf.</div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Datum</th>
+            <th>Tijdslot</th>
+            <th>Status</th>
+            <th>Deadline</th>
+          </tr>
+        </thead>
+        <tbody id="upcomingDeliveriesBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Nieuwe bestelling</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Verpakking</th>
+            <th class="right">Aantal dozen</th>
+            <th class="right">Totaal stuks</th>
+          </tr>
+        </thead>
+        <tbody id="newOrderBody"></tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:12px;">
+      <label for="newOrderNote">Extra uitleg</label>
+      <textarea id="newOrderNote"></textarea>
+    </div>
+
+    <div class="toolbar">
+      <button id="submitNewOrderBtn" onclick="submitTechOrder()">Bestelling doorsturen</button>
+    </div>
+  </div>
+</div>

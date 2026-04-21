@@ -1,9 +1,73 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<script>
+  function renderNotificationsSection(data) {
+    APP_STATE.notificationsData = data || {};
+    renderNotifications((APP_STATE.notificationsData.notifications) || []);
+    renderReminderBanner((APP_STATE.notificationsData.reminders) || []);
+  }
+
+  function renderNotifications(notifications) {
+    const wrap = document.getElementById('notificationsWrap');
+    if (!wrap) return;
+
+    if (!notifications.length) {
+      wrap.innerHTML = '<div class="empty-state">Geen meldingen.</div>';
+      return;
+    }
+
+    wrap.innerHTML = notifications.map(item => `
+      <div class="card" style="margin-bottom:12px; border-radius:12px; padding:14px;">
+        <div>
+          <span class="pill">${item.type || 'Melding'}</span>
+          <span class="pill">${item.status || ''}</span>
+          ${item.aangemaaktOp ? `<span class="pill">${item.aangemaaktOp}</span>` : ''}
+        </div>
+        <div style="font-weight:700; margin-top:6px;">${item.titel || ''}</div>
+        <div class="muted" style="margin-top:6px;">${item.bericht || ''}</div>
+        <div class="toolbar">
+          ${String(item.status || '') === 'Open' && item.notificatieId
+            ? `<button class="btn-light" onclick="markNotificationAsRead('${escapeJs(item.notificatieId)}')">Markeer als gelezen</button>`
+            : ''
+          }
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderReminderBanner(reminders) {
+    const banner = document.getElementById('reminderBox');
+    if (!banner) return;
+
+    banner.style.display = 'none';
+
+    const items = reminders || [];
+    if (!items.length) return;
+
+    banner.textContent = items[0].bericht || items[0].titel || 'Er is een open melding.';
+    banner.style.display = 'block';
+  }
+
+  function markNotificationAsRead(notificatieId) {
+    if (!notificatieId) return;
+
+    openConfirm('Melding markeren als gelezen?', () => executeMarkNotificationAsRead(notificatieId));
+  }
+
+  async function executeMarkNotificationAsRead(notificatieId) {
+    await runAction({
+      busyMessage: 'Melding markeren...',
+      method: 'markNotificationRead',
+      payload: withSession({ notificatieId }),
+      fallbackErrorMessage: 'Fout bij markeren melding.',
+      onSuccess: () => {
+        const existing = (APP_STATE.notificationsData && APP_STATE.notificationsData.notifications) || [];
+        const updated = existing.map(item => {
+          if (String(item.notificatieId) !== String(notificatieId)) return item;
+          return Object.assign({}, item, { status: 'Gelezen' });
+        });
+
+        APP_STATE.notificationsData.notifications = updated;
+        renderNotifications(updated);
+      }
+    });
+  }
+</script>

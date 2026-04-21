@@ -1,9 +1,51 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<div id="tabDeliveries" class="tab-panel active">
+  <div class="card">
+    <h2>Beleveringsmomenten</h2>
+    <div class="muted">Kies een beleveringsmoment om de artikellijst te openen.</div>
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Technieker</th>
+            <th>Klaar tegen</th>
+            <th>Status</th>
+            <th class="right">Lijnen</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="groupsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Geselecteerd beleveringsmoment</h2>
+    <div id="selectedInfo" class="muted">Nog geen beleveringsmoment geselecteerd.</div>
+
+    <div class="toolbar">
+      <button id="readyBtn" onclick="saveAndSetGroupStatus('Klaargezet')">Klaargezet</button>
+      <button id="dispatchBtn" onclick="saveAndSetGroupStatus('Meegegeven')">Meegegeven</button>
+      <button id="notPickedBtn" class="btn-light" onclick="saveAndSetNotPicked()">Niet afgehaald</button>
+      <button id="exportCsvBtn" class="btn-light" onclick="exportSelectedCsv()">Export CSV</button>
+    </div>
+
+    <div class="note-box">Afgevinkt = volledig in karretje en voorzien = gevraagd. Niet afgevinkt = lager voorzien aantal + reden verplicht.</div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th class="right">Gevraagd dozen</th>
+            <th>Afvinken</th>
+            <th class="right">Voorzien dozen</th>
+            <th class="right">Delta dozen</th>
+            <th>Reden delta</th>
+          </tr>
+        </thead>
+        <tbody id="selectedLinesBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>

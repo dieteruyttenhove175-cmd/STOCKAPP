@@ -1,9 +1,47 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<div id="tabBusCount" class="tab-panel">
+  <div class="card">
+    <h2>Openstaande busstocktellingen</h2>
+    <div class="muted">Je ziet hier enkel tellingstaken. Je ziet niet de volledige busstock als standaardoverzicht.</div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>TellingID</th>
+            <th>Datum</th>
+            <th>Reden</th>
+            <th>Status</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="openBusCountsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Geselecteerde telling</h2>
+    <div id="selectedBusCountInfo" class="muted">Nog geen telling geselecteerd.</div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th class="right">Systeemaantal</th>
+            <th class="right">Geteld aantal</th>
+            <th class="right">Delta</th>
+          </tr>
+        </thead>
+        <tbody id="selectedBusCountLinesBody"></tbody>
+      </table>
+    </div>
+
+    <div class="toolbar">
+      <button id="saveBusCountBtn" class="btn-light" onclick="saveTechBusCount()">Telling opslaan</button>
+      <button id="submitBusCountBtn" onclick="submitTechBusCount()">Telling indienen</button>
+    </div>
+  </div>
+</div>

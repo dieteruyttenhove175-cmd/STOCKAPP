@@ -1,9 +1,66 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<script>
+  function renderTechMobileRequestData(data) {
+    APP_STATE.techMobileRequestData = data || {};
+    renderMobileWarehouses((data && data.mobileWarehouses) || []);
+    renderMyMobileRequests((data && data.requests) || []);
+    renderMobileRequestLines((data && data.newRequestLines) || []);
+  }
+
+  function renderMobileWarehouses(rows) {
+    const select = document.getElementById('mobileWarehouseSelect');
+    if (!select) return;
+
+    select.innerHTML = rows.length
+      ? rows.map(row => `<option value="${row.code}">${row.naam}</option>`).join('')
+      : '<option value="">Geen mobiel magazijn</option>';
+  }
+
+  function renderMobileRequestLines(rows) {
+    const body = document.getElementById('mobileRequestLinesBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="4" class="muted">Geen aanvraaglijnen beschikbaar.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map((row, idx) => `
+      <tr>
+        <td>${row.artikelCode || ''}</td>
+        <td>${row.artikelOmschrijving || ''}</td>
+        <td>${row.eenheid || ''}</td>
+        <td class="right"><input type="number" min="0" step="1" value="${row.aantal || 0}" data-mobile-request-row="${idx}"></td>
+      </tr>
+    `).join('');
+  }
+
+  function renderMyMobileRequests(rows) {
+    const body = document.getElementById('myMobileRequestsBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="5" class="muted">Nog geen aanvragen.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map(row => `
+      <tr>
+        <td>${row.requestId || ''}</td>
+        <td>${row.documentDatum || ''}</td>
+        <td>${row.reden || ''}</td>
+        <td>${row.status || ''}</td>
+        <td class="right">${row.lineCount || 0}</td>
+      </tr>
+    `).join('');
+  }
+
+  function submitMobileRequest() {
+    openConfirm('Aanvraag indienen naar mobiel magazijn?', function () {
+      showBusy('Aanvraag indienen...');
+      setTimeout(function () {
+        hideBusy();
+        showSuccess('Aanvraag ingediend.');
+      }, 200);
+    });
+  }
+</script>

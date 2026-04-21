@@ -1,9 +1,244 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<script>
+  function renderCentralSection(data) {
+    APP_STATE.centralData = data || {};
+    renderCentralWarehouseTable((APP_STATE.centralData.centralWarehouse) || []);
+    renderBusStockTable((APP_STATE.centralData.busStock) || []);
+    renderDeltaAlerts((APP_STATE.centralData.deltaAlerts) || []);
+    renderCentralTechniciansForCounting((APP_STATE.centralData.technicians) || []);
+  }
+
+  function renderCentralTechniciansForCounting(technicians) {
+    const select = document.getElementById('busCountTech');
+    if (!select) return;
+
+    select.innerHTML = (technicians || []).length
+      ? technicians.map(t => `<option value="${t.code}">${t.naam} (${t.code})</option>`).join('')
+      : '<option value="">Geen techniekers</option>';
+  }
+
+  function renderCentralWarehouseTable(rows) {
+    const body = document.getElementById('centralWarehouseBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="7" class="muted">Nog geen voorraad in centraal magazijn.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map(item => `
+      <tr>
+        <td>${item.artikelCode || ''}</td>
+        <td>${item.artikelOmschrijving || ''}</td>
+        <td>${item.eenheid || ''}</td>
+        <td class="right">${item.voorraadCentraal || 0}</td>
+        <td class="right">${item.min === '' ? '' : (item.min || '')}</td>
+        <td class="right">${item.max === '' ? '' : (item.max || '')}</td>
+        <td>${item.laatsteMutatie || ''}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderBusStockTable(rows) {
+    const body = document.getElementById('busStockBody');
+    if (!body) return;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="6" class="muted">Nog geen busvoorraad opgebouwd.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map(item => `
+      <tr>
+        <td>${item.techniekerNaam || ''}</td>
+        <td>${item.artikelCode || ''}</td>
+        <td>${item.artikelOmschrijving || ''}</td>
+        <td>${item.eenheid || ''}</td>
+        <td class="right">${item.voorraadBus || 0}</td>
+        <td>${item.laatsteMutatie || ''}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderDeltaAlerts(alerts) {
+    const wrap = document.getElementById('deltaAlertsWrap');
+    if (!wrap) return;
+
+    if (!alerts.length) {
+      wrap.innerHTML = `<div class="empty-state">Geen delta-signalen op dit moment.</div>`;
+      return;
+    }
+
+    wrap.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Referentie</th>
+              <th>Extra info</th>
+              <th>Status</th>
+              <th class="right">Delta</th>
+              <th>Actie</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${alerts.map(item => `
+              <tr class="alert-row">
+                <td>${item.type || ''}</td>
+                <td>${item.reference || ''}</td>
+                <td>${item.extraInfo || ''}</td>
+                <td><span class="status-badge ${statusClass(item.status)}">${item.status || ''}</span></td>
+                <td class="right">${item.delta || 0}</td>
+                <td>${item.actionHtml || ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function createFullBusCountRequest() {
+    openConfirm('Volledige busstocktelling aanvragen?', executeCreateFullBusCountRequest);
+  }
+
+  async function executeCreateFullBusCountRequest() {
+    const techniekerCode = document.getElementById('busCountTech')?.value || '';
+    const documentDatum = document.getElementById('busCountDate')?.value || '';
+    const reden = document.getElementById('busCountReason')?.value || 'Periodieke telling';
+
+    if (!techniekerCode) {
+      showError('Kies eerst een technieker.');
+      return;
+    }
+
+    if (!documentDatum) {
+      showError('Documentdatum is verplicht.');
+      return;
+    }
+
+    await runAction({
+      buttonId: 'createFullBusCountBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Busstocktelling aanvragen...',
+      method: 'createBusCountRequest',
+      payload: withSession({
+        techniekerCode,
+        documentDatum,
+        reden,
+        actor: document.getElementById('actorInput')?.value || 'Gebruiker',
+        requestedArticles: []
+      }),
+      fallbackErrorMessage: 'Fout bij aanmaken busstocktelling.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+
+  async function searchCatalogForStock() {
+    const query = (document.getElementById('stockSearch')?.value || '').trim();
+    if (!query) {
+      showError('Geef eerst een artikelcode of zoekterm in.');
+      return;
+    }
+
+    showBusy('Catalogus zoeken...');
+    try {
+      const results = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .searchSupplierCatalog(query, window.SESSION_ID);
+      });
+
+      hideBusy();
+
+      const body = document.getElementById('stockCatalogResultsBody');
+      if (!body) return;
+
+      if (!results || !results.length) {
+        body.innerHTML = `<tr><td colspan="5" class="muted">Geen resultaten.</td></tr>`;
+        return;
+      }
+
+      body.innerHTML = results.map(item => `
+        <tr>
+          <td>${item.artikelCode}</td>
+          <td>${item.artikelOmschrijving}</td>
+          <td>${item.eenheid}</td>
+          <td>${item.leverancier}</td>
+          <td><button class="btn-light" onclick="openStockAdjustment('${escapeJs(item.artikelCode)}','${escapeJs(item.artikelOmschrijving)}','${escapeJs(item.eenheid)}')">Kies</button></td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      hideBusy();
+      showError(extractErrorMessage(err, 'Fout bij zoeken.'), true);
+    }
+  }
+
+  function openStockAdjustment(code, omschrijving, eenheid) {
+    APP_STATE.selectedStockArticle = { code, omschrijving, eenheid };
+    const box = document.getElementById('stockAdjustBox');
+    const info = document.getElementById('stockAdjustInfo');
+
+    if (box) box.style.display = 'block';
+    if (info) info.innerHTML = `<span class="pill">${code}</span><span class="pill">${omschrijving}</span>`;
+
+    switchTab('central');
+  }
+
+  function submitStockAdjustment() {
+    openConfirm('Toevoegen aan centraal magazijn bevestigen?', executeSubmitStockAdjustment);
+  }
+
+  async function executeSubmitStockAdjustment() {
+    if (!APP_STATE.selectedStockArticle) {
+      showError('Kies eerst een artikel.');
+      return;
+    }
+
+    const datumDocument = document.getElementById('stockAdjustDate')?.value || '';
+    const aantal = Number(document.getElementById('stockAdjustAmount')?.value || 0);
+    const reden = document.getElementById('stockAdjustReason')?.value || '';
+    const opmerking = document.getElementById('stockAdjustNote')?.value || '';
+
+    if (!datumDocument) {
+      showError('Documentdatum is verplicht.');
+      return;
+    }
+
+    if (aantal <= 0) {
+      showError('Aantal moet groter zijn dan 0.');
+      return;
+    }
+
+    if (!reden) {
+      showError('Reden is verplicht.');
+      return;
+    }
+
+    if (reden === 'Andere reden' && !String(opmerking || '').trim()) {
+      showError('Opmerking is verplicht bij Andere reden.');
+      return;
+    }
+
+    await runAction({
+      buttonId: 'submitStockAdjustBtn',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Magazijncorrectie opslaan...',
+      method: 'createWarehouseAdjustment',
+      payload: withSession({
+        artikelCode: APP_STATE.selectedStockArticle.code,
+        artikelOmschrijving: APP_STATE.selectedStockArticle.omschrijving,
+        eenheid: APP_STATE.selectedStockArticle.eenheid,
+        typeMateriaal: document.getElementById('stockAdjustType')?.value || '',
+        datumDocument,
+        aantal,
+        reden,
+        opmerking,
+        actor: document.getElementById('actorInput')?.value || 'Gebruiker'
+      }),
+      fallbackErrorMessage: 'Fout bij magazijncorrectie.',
+      onSuccess: result => showSuccess(result.message)
+    });
+  }
+</script>

@@ -1,9 +1,144 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<div id="tabCentral" class="tab-panel">
+  <div class="card">
+    <div class="section-title">
+      <h2>Losse busstocktelling</h2>
+      <div class="muted">Gebruik dit voor periodieke algemene tellingen op een bus.</div>
+    </div>
+
+    <div class="grid three" style="margin-top:12px;">
+      <div>
+        <label for="busCountTech">Technieker / bus</label>
+        <select id="busCountTech"></select>
+      </div>
+      <div>
+        <label for="busCountDate">Documentdatum</label>
+        <input id="busCountDate" type="date">
+      </div>
+      <div>
+        <label for="busCountReason">Reden</label>
+        <input id="busCountReason" placeholder="Bijv. Periodieke telling">
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button id="createFullBusCountBtn" onclick="createFullBusCountRequest()">Volledige busstocktelling aanvragen</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Delta-signalen</h2>
+    <div class="muted">Beleveringen of ontvangsten met afwijkingen die extra opvolging vragen.</div>
+    <div id="deltaAlertsWrap" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Centraal magazijn manueel aanvullen</h2>
+      <div class="muted">Gebruik dit voor historische opbouw of stockcorrecties.</div>
+    </div>
+
+    <div class="grid two" style="margin-top:12px;">
+      <div>
+        <label for="stockSearch">Zoek artikel</label>
+        <input id="stockSearch" placeholder="Artikelcode / omschrijving / leverancier">
+      </div>
+      <div style="align-self:end;">
+        <button class="btn-light" id="stockSearchBtn" onclick="searchCatalogForStock()">Zoeken</button>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:12px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th>Leverancier</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="stockCatalogResultsBody"></tbody>
+      </table>
+    </div>
+
+    <div id="stockAdjustBox" style="display:none; margin-top:16px;">
+      <div class="muted" id="stockAdjustInfo"></div>
+      <div class="grid two" style="margin-top:12px;">
+        <div>
+          <label for="stockAdjustType">Type materiaal</label>
+          <select id="stockAdjustType">
+            <option value="Grabbel">Grabbel</option>
+            <option value="Behoefte">Behoefte</option>
+          </select>
+        </div>
+        <div>
+          <label for="stockAdjustDate">Documentdatum</label>
+          <input id="stockAdjustDate" type="date">
+        </div>
+        <div>
+          <label for="stockAdjustAmount">Aantal</label>
+          <input id="stockAdjustAmount" type="number" min="1" step="1">
+        </div>
+        <div>
+          <label for="stockAdjustReason">Reden</label>
+          <select id="stockAdjustReason">
+            <option value="Historische opbouw">Historische opbouw</option>
+            <option value="Correctie startvoorraad">Correctie startvoorraad</option>
+            <option value="Inventarisverschil">Inventarisverschil</option>
+            <option value="Andere reden">Andere reden</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <label for="stockAdjustNote">Opmerking</label>
+        <textarea id="stockAdjustNote"></textarea>
+      </div>
+      <div style="margin-top:12px;">
+        <button id="submitStockAdjustBtn" onclick="submitStockAdjustment()">Toevoegen aan centraal magazijn</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">
+      <h2>Overzicht centraal magazijn</h2>
+      <div class="muted">Actuele voorraad opgebouwd vanuit magazijnmutaties.</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th class="right">Voorraad</th>
+            <th class="right">Min</th>
+            <th class="right">Max</th>
+            <th>Laatste mutatie</th>
+          </tr>
+        </thead>
+        <tbody id="centralWarehouseBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Busvoorraad</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Technieker</th>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th class="right">Voorraad bus</th>
+            <th>Laatste mutatie</th>
+          </tr>
+        </thead>
+        <tbody id="busStockBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>

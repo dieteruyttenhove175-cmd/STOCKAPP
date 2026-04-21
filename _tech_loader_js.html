@@ -1,9 +1,81 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<script>
+  function clearTechSelection() {
+    APP_STATE.selectedTechDeliveryId = null;
+    APP_STATE.selectedBusCountId = null;
+
+    if (typeof renderSelectedTechDelivery === 'function') {
+      renderSelectedTechDelivery(null);
+    }
+
+    if (typeof renderSelectedBusCount === 'function') {
+      renderSelectedBusCount(null);
+    }
+  }
+
+  function initTechDefaultDates_() {
+    const today = new Date().toISOString().slice(0, 10);
+    ['mobileRequestDate'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && !el.value) el.value = today;
+    });
+  }
+
+  async function loadTechAll(fullRender) {
+    if (!ensureSession()) return;
+
+    if (fullRender) {
+      showBusy('Gegevens laden...');
+    }
+
+    try {
+      const techRef = window.techRef || '';
+
+      const results = await Promise.all([
+        serverCall('getTechnicianDashboardData', withSession({ techRef })),
+        serverCall('getTechnicianNotificationsData', withSession({ techRef })),
+        serverCall('getTechnicianBusCountsData', withSession({ techRef })),
+        serverCall('getTechnicianMobileRequestsData', withSession({ techRef }))
+      ]);
+
+      renderTechDashboardData(results[0] || {});
+      renderTechNotificationsData(results[1] || {});
+      renderTechBusCountData(results[2] || {});
+      renderTechMobileRequestData(results[3] || {});
+
+      switchTechTab(APP_STATE.techActiveTab || 'neworder');
+    } catch (err) {
+      showError(extractErrorMessage(err, 'Fout bij laden techniekergegevens.'), !!fullRender);
+    } finally {
+      if (fullRender) {
+        hideBusy();
+      }
+    }
+  }
+
+  function manualTechRefresh() {
+    clearError();
+    loadTechAll(true);
+  }
+
+  function initTechnicianShell() {
+    const actorInput = document.getElementById('actorInput');
+    if (actorInput && !actorInput.value && window.CURRENT_USER_NAME) {
+      actorInput.value = window.CURRENT_USER_NAME;
+    }
+
+    initTechDefaultDates_();
+    APP_STATE.techActiveTab = APP_STATE.techActiveTab || 'neworder';
+
+    loadTechAll(true);
+  }
+
+  setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+
+    const secondsSinceInteraction = (Date.now() - APP_STATE.lastUserInteractionAt) / 1000;
+    if (secondsSinceInteraction < 20) return;
+
+    // stille refresh: geen popup, geen success message
+    loadTechAll(false);
+  }, 30000);
+</script>

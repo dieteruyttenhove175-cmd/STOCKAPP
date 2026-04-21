@@ -1,9 +1,57 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<div id="tabMobile" class="tab-panel">
+  <div class="card">
+    <h2>Nieuwe aanvraag naar mobiel magazijn</h2>
+    <div class="muted">Gebruik dit enkel als je materiaal nodig hebt dat normaal niet meer nodig zou mogen zijn. Geef altijd de reden op.</div>
+
+    <div class="grid three" style="margin-top:12px;">
+      <div>
+        <label for="mobileWarehouseSelect">Mobiel magazijn</label>
+        <select id="mobileWarehouseSelect"></select>
+      </div>
+      <div>
+        <label for="mobileRequestDate">Documentdatum</label>
+        <input id="mobileRequestDate" type="date">
+      </div>
+      <div>
+        <label for="mobileRequestReason">Reden aanvraag</label>
+        <input id="mobileRequestReason" placeholder="Bijv. foutieve afmelding / stockbreuk">
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:16px;">
+      <table>
+        <thead>
+          <tr>
+            <th>ArtikelNr</th>
+            <th>Artikel</th>
+            <th>Eenheid</th>
+            <th class="right">Aantal</th>
+          </tr>
+        </thead>
+        <tbody id="mobileRequestLinesBody"></tbody>
+      </table>
+    </div>
+
+    <div class="toolbar">
+      <button id="submitMobileRequestBtn" onclick="submitMobileRequest()">Aanvraag indienen naar mobiel magazijn</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Mijn aanvragen naar mobiel magazijn</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>AanvraagID</th>
+            <th>Datum</th>
+            <th>Reden</th>
+            <th>Status</th>
+            <th class="right">Lijnen</th>
+          </tr>
+        </thead>
+        <tbody id="myMobileRequestsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>

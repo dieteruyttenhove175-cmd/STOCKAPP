@@ -1,9 +1,313 @@
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-  </head>
-  <body>
-    
-  </body>
-</html>
+<script>
+  window.PREP_REASONS = ['', 'Niet genoeg in stock', 'Teveel besteld', 'Andere reden'];
+
+  function statusClass(status) {
+    const value = String(status || '').toLowerCase();
+    if (value === 'klaargezet') return 'status-klaargezet';
+    if (value === 'meegegeven') return 'status-meegegeven';
+    if (value === 'niet afgehaald') return 'status-niet-afgehaald';
+    if (value === 'verwacht') return 'status-verwacht';
+    if (value === 'in behandeling') return 'status-in-behandeling';
+    if (value === 'ingediend') return 'status-ingediend';
+    if (value === 'goedgekeurd') return 'status-goedgekeurd';
+    if (value === 'gesloten') return 'status-gesloten';
+    if (value === 'open') return 'status-open';
+    if (value === 'geboekt') return 'status-geboekt';
+    if (value === 'gelezen') return 'status-gelezen';
+    return 'status-aangevraagd';
+  }
+
+  function renderDeliveriesSection(data) {
+    APP_STATE.warehouseData = APP_STATE.warehouseData || {};
+    APP_STATE.warehouseData.upcomingGroups = (data && data.upcomingGroups) || [];
+    APP_STATE.warehouseData.stats = (data && data.stats) || {};
+    renderDeliveryStats();
+    renderGroups(APP_STATE.warehouseData.upcomingGroups || []);
+
+    const groups = APP_STATE.warehouseData.upcomingGroups || [];
+    if (!groups.length) {
+      renderSelectedEmpty();
+      return;
+    }
+
+    let selectedGroup = groups.find(g => g.key === APP_STATE.selectedGroupKey);
+    if (!selectedGroup) {
+      selectedGroup = groups[0];
+      APP_STATE.selectedGroupKey = selectedGroup.key;
+    }
+
+    renderSelectedGroup(selectedGroup);
+  }
+
+  function renderDeliveryStats() {
+    const stats = (APP_STATE.warehouseData && APP_STATE.warehouseData.stats) || {};
+    const el = document.getElementById('stats');
+    if (!el) return;
+
+    const currentHtml = el.innerHTML || '';
+
+    if (currentHtml && currentHtml.indexOf('Open beleveringen') >= 0) {
+      el.innerHTML = `
+        <div class="stat"><div class="label">Open beleveringen</div><div class="value">${stats.open || 0}</div></div>
+        <div class="stat"><div class="label">Klaargezet</div><div class="value">${stats.klaargezet || 0}</div></div>
+        <div class="stat"><div class="label">Meegegeven</div><div class="value">${stats.meegegeven || 0}</div></div>
+        <div class="stat"><div class="label">Niet afgehaald</div><div class="value">${stats.nietAfgehaald || 0}</div></div>
+        <div class="stat"><div class="label">Vandaag</div><div class="value">${stats.vandaag || 0}</div></div>
+        <div class="stat"><div class="label">Teltaken</div><div class="value">${stats.telAlerts || 0}</div></div>
+      `;
+    }
+  }
+
+  function renderGroups(groups) {
+    const body = document.getElementById('groupsBody');
+    if (!body) return;
+
+    if (!groups.length) {
+      body.innerHTML = `<tr><td colspan="5" class="muted">Geen beleveringsmomenten.</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = groups.map(group => `
+      <tr class="${group.key === APP_STATE.selectedGroupKey ? 'selected-row' : ''}">
+        <td>${group.techniekerNaam || ''}</td>
+        <td>${group.klaarTegenLabel || ''}</td>
+        <td><span class="status-badge ${statusClass(group.groupStatus)}">${group.groupStatus || ''}</span></td>
+        <td class="right">${group.aantalLijnen || 0}</td>
+        <td><button class="btn-light" onclick="selectGroup('${escapeJs(group.key)}')">Open</button></td>
+      </tr>
+    `).join('');
+  }
+
+  function selectGroup(groupKey) {
+    APP_STATE.selectedGroupKey = groupKey;
+    const group = ((APP_STATE.warehouseData && APP_STATE.warehouseData.upcomingGroups) || []).find(g => g.key === groupKey);
+    renderGroups((APP_STATE.warehouseData && APP_STATE.warehouseData.upcomingGroups) || []);
+    renderSelectedGroup(group || null);
+    switchTab('deliveries');
+  }
+
+  function getSelectedGroup() {
+    return ((APP_STATE.warehouseData && APP_STATE.warehouseData.upcomingGroups) || []).find(g => g.key === APP_STATE.selectedGroupKey) || null;
+  }
+
+  function renderSelectedEmpty() {
+    const info = document.getElementById('selectedInfo');
+    const body = document.getElementById('selectedLinesBody');
+    if (info) info.textContent = 'Nog geen beleveringsmoment geselecteerd.';
+    if (body) body.innerHTML = `<tr><td colspan="7" class="muted">Geen gegevens.</td></tr>`;
+
+    ['readyBtn', 'dispatchBtn', 'notPickedBtn'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = true;
+    });
+  }
+
+  function renderSelectedGroup(group) {
+    if (!group) {
+      renderSelectedEmpty();
+      return;
+    }
+
+    APP_STATE.selectedGroupKey = group.key;
+
+    const info = document.getElementById('selectedInfo');
+    const body = document.getElementById('selectedLinesBody');
+    const readyBtn = document.getElementById('readyBtn');
+    const dispatchBtn = document.getElementById('dispatchBtn');
+    const notPickedBtn = document.getElementById('notPickedBtn');
+
+    if (info) {
+      info.innerHTML = `
+        <span class="pill">${group.techniekerNaam || ''}</span>
+        <span class="pill">${group.klaarTegenLabel || ''}</span>
+        <span class="pill">Status: ${group.groupStatus || ''}</span>
+        <span class="pill">Lijnen: ${group.aantalLijnen || 0}</span>
+      `;
+    }
+
+    const isLocked = ['Meegegeven', 'Goedgekeurd'].includes(String(group.groupStatus || ''));
+    const canDispatch = String(group.groupStatus || '') === 'Klaargezet';
+
+    if (readyBtn) readyBtn.disabled = isLocked;
+    if (dispatchBtn) dispatchBtn.disabled = !canDispatch;
+    if (notPickedBtn) notPickedBtn.disabled = isLocked;
+
+    if (!body) return;
+
+    body.innerHTML = (group.lineItems || []).map(item => {
+      const gevraagd = Number(item.aantalDozen || 0);
+      const checked = item.inKarretje === 'Ja';
+      const provided = checked ? gevraagd : Number(item.aantalDozenVoorzien || 0);
+      const delta = Math.max(gevraagd - provided, 0);
+
+      return `
+        <tr class="${delta > 0 ? 'delta-row' : ''}">
+          <td>${item.artikelCode || ''}</td>
+          <td>${item.artikelOmschrijving || ''}</td>
+          <td class="right">${gevraagd}</td>
+          <td><input type="checkbox" id="cart-${item.bestellingId}" ${checked ? 'checked' : ''} ${isLocked ? 'disabled' : ''} onchange="togglePreparationInputs('${item.bestellingId}', ${gevraagd})"></td>
+          <td class="right"><input class="line-input" type="number" min="0" max="${gevraagd}" step="1" id="prov-${item.bestellingId}" value="${provided}" ${checked || isLocked ? 'disabled' : ''} oninput="updateLinePreview('${item.bestellingId}', ${gevraagd})"></td>
+          <td class="right"><span id="delta-${item.bestellingId}">${delta}</span></td>
+          <td><select class="line-select" id="reason-${item.bestellingId}" ${checked || isLocked ? 'disabled' : ''}>${PREP_REASONS.map(reason => `<option value="${reason}" ${item.redenDelta === reason ? 'selected' : ''}>${reason || '-- kies reden --'}</option>`).join('')}</select></td>
+        </tr>
+      `;
+    }).join('') || `<tr><td colspan="7" class="muted">Geen lijnen.</td></tr>`;
+  }
+
+  function togglePreparationInputs(orderId, gevraagdDozen) {
+    const checked = document.getElementById('cart-' + orderId)?.checked;
+    const prov = document.getElementById('prov-' + orderId);
+    const reason = document.getElementById('reason-' + orderId);
+
+    if (!prov || !reason) return;
+
+    if (checked) {
+      prov.value = gevraagdDozen;
+      prov.disabled = true;
+      reason.value = '';
+      reason.disabled = true;
+    } else {
+      if (Number(prov.value) >= gevraagdDozen) {
+        prov.value = Math.max(gevraagdDozen - 1, 0);
+      }
+      prov.disabled = false;
+      reason.disabled = false;
+    }
+
+    updateLinePreview(orderId, gevraagdDozen);
+  }
+
+  function updateLinePreview(orderId, gevraagdDozen) {
+    const prov = document.getElementById('prov-' + orderId);
+    const deltaEl = document.getElementById('delta-' + orderId);
+    if (!prov || !deltaEl) return;
+    const provided = Number(prov.value || 0);
+    deltaEl.textContent = String(Math.max(gevraagdDozen - provided, 0));
+  }
+
+  function collectSelectedGroupLines(group) {
+    return (group.lineItems || []).map(item => ({
+      orderId: item.bestellingId,
+      inKarretje: !!document.getElementById('cart-' + item.bestellingId)?.checked,
+      aantalDozenVoorzien: Number(document.getElementById('prov-' + item.bestellingId)?.value || 0),
+      redenDelta: document.getElementById('reason-' + item.bestellingId)?.value || ''
+    }));
+  }
+
+  function validateSelectedGroupLines(group, lines) {
+    for (const line of lines) {
+      const source = (group.lineItems || []).find(item => item.bestellingId === line.orderId);
+      if (!source) continue;
+
+      const gevraagd = Number(source.aantalDozen || 0);
+      if (line.inKarretje) continue;
+
+      if (line.aantalDozenVoorzien < 0) return 'Voorzien aantal mag niet negatief zijn.';
+      if (line.aantalDozenVoorzien >= gevraagd) return `Bij artikel ${source.artikelCode} moet voorzien lager zijn dan gevraagd als je niet afvinkt.`;
+      if (!line.redenDelta) return `Kies een reden voor artikel ${source.artikelCode}.`;
+    }
+    return '';
+  }
+
+  async function savePreparationAndThen(status, note) {
+    const group = getSelectedGroup();
+    if (!group) {
+      showError('Geen beleveringsmoment geselecteerd.');
+      return;
+    }
+
+    const actor = document.getElementById('actorInput')?.value || 'Gebruiker';
+    const lines = collectSelectedGroupLines(group);
+    const validationError = validateSelectedGroupLines(group, lines);
+
+    if (validationError) {
+      showError(validationError);
+      return;
+    }
+
+    showBusy('Voorbereiding en status opslaan...');
+
+    try {
+      await serverCall('savePreparationBatch', withSession({ actor, lines }));
+      const result = await serverCall('updateWarehouseGroupStatus', withSession({
+        orderIds: group.orderIds || [],
+        status,
+        actor,
+        note: note || ''
+      }));
+
+      hideBusy();
+      showSuccess(`${result.message} (${result.updated || 0} lijnen)`);
+    } catch (err) {
+      hideBusy();
+      showError(extractErrorMessage(err, 'Fout bij opslaan voorbereiding/status.'), true);
+    }
+  }
+
+  function saveAndSetGroupStatus(status) {
+    const label = status === 'Klaargezet'
+      ? 'belevering op Klaargezet zetten'
+      : 'belevering op Meegegeven zetten';
+
+    openConfirm(`Bevestig: ${label}?`, () => savePreparationAndThen(status, ''));
+  }
+
+  function saveAndSetNotPicked() {
+    const note = prompt('Opmerking voor niet afgehaald:', 'Niet afgehaald');
+    if (note === null) return;
+    openConfirm('Bevestig: belevering op Niet afgehaald zetten?', () => savePreparationAndThen('Niet afgehaald', note || 'Niet afgehaald'));
+  }
+
+  function exportSelectedCsv() {
+    const group = getSelectedGroup();
+    if (!group) {
+      showError('Geen beleveringsmoment geselecteerd.');
+      return;
+    }
+
+    const currentLines = collectSelectedGroupLines(group);
+    const currentMap = {};
+    currentLines.forEach(line => { currentMap[line.orderId] = line; });
+
+    const lines = [];
+    lines.push(['Technieker', group.techniekerNaam || '']);
+    lines.push(['Klaar tegen', group.klaarTegenLabel || '']);
+    lines.push([]);
+    lines.push(['ArtikelNr', 'Artikel', 'Gevraagd dozen', 'Voorzien dozen', 'Delta dozen', 'Reden delta']);
+
+    (group.lineItems || []).forEach(item => {
+      const current = currentMap[item.bestellingId] || {};
+      const checked = !!current.inKarretje;
+      const provided = checked ? Number(item.aantalDozen || 0) : Number(current.aantalDozenVoorzien || 0);
+      const delta = Math.max(Number(item.aantalDozen || 0) - provided, 0);
+      const reason = checked ? '' : (current.redenDelta || '');
+
+      lines.push([
+        item.artikelCode || '',
+        item.artikelOmschrijving || '',
+        item.aantalDozen || 0,
+        provided,
+        delta,
+        reason
+      ]);
+    });
+
+    const csv = lines
+      .map(row => row.map(cell => `"${String(cell || '').replace(/"/g, '""')}"`).join(';'))
+      .join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `magazijnbon_${safeFileName_(group.techniekerCode || 'groep')}_${safeFileName_(group.klaarTegenSort || 'export')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function safeFileName_(value) {
+    return String(value || '').replace(/[\\/:*?"<>| ]+/g, '_');
+  }
+</script>
