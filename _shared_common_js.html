@@ -4,14 +4,28 @@
     receiptsData: null,
     returnsData: null,
     needIssueData: null,
+    centralData: null,
+    notificationsData: null,
+    autoNeedProposalPayload: null,
+
     selectedGroupKey: null,
     selectedReceiptId: null,
     selectedReturnId: null,
     selectedNeedIssueId: null,
     selectedStockArticle: null,
-    activeTab: 'deliveries',
+
+    selectedTechDeliveryId: null,
+    selectedBusCountId: null,
+
+    activeTab: localStorage.getItem('shared_active_tab') || 'deliveries',
+    techActiveTab: localStorage.getItem('tech_active_tab') || 'neworder',
+
     lastUserInteractionAt: Date.now()
   };
+
+  function getPageRole() {
+    return window.PAGE_ROLE || '';
+  }
 
   function getPagePermissions() {
     return window.PAGE_PERMISSIONS || {};
@@ -27,7 +41,7 @@
 
   function ensureSession() {
     if (!window.SESSION_ID && window.CURRENT_AUTH_MODE !== 'admin_google') {
-      showError('Geen actieve sessie gevonden. Meld je opnieuw aan.');
+      showError('Geen actieve sessie gevonden. Meld je opnieuw aan.', true);
       return false;
     }
     return true;
@@ -39,6 +53,15 @@
     });
   }
 
+  function safeTextClient(value) {
+    return String(value == null ? '' : value).trim();
+  }
+
+  function safeNumberClient(value, fallback) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : (fallback == null ? 0 : fallback);
+  }
+
   function escapeJs(text) {
     return String(text || '')
       .replace(/\\/g, '\\\\')
@@ -48,38 +71,74 @@
   }
 
   function extractErrorMessage(err, fallbackMessage) {
-    if (err && err.message) return err.message;
-    if (typeof err === 'string' && err.trim()) return err;
+    if (err && typeof err.message === 'string' && err.message.trim()) {
+      return err.message.trim();
+    }
+
+    if (typeof err === 'string' && err.trim()) {
+      return err.trim();
+    }
+
+    if (err && typeof err.toString === 'function') {
+      const txt = String(err.toString() || '').trim();
+      if (txt && txt !== '[object Object]') return txt;
+    }
+
     return fallbackMessage || 'Onbekende fout.';
   }
 
+  function setBoxMessage(boxId, message, visible) {
+    const box = document.getElementById(boxId);
+    if (!box) return;
+
+    if (message != null) {
+      box.textContent = message;
+    }
+
+    box.style.display = visible ? 'block' : 'none';
+  }
+
   function clearError() {
-    const box = document.getElementById('errorBox');
-    if (box) box.style.display = 'none';
+    setBoxMessage('errorBox', '', false);
+  }
+
+  function clearSuccess() {
+    setBoxMessage('successBox', '', false);
   }
 
   function showError(message, usePopup) {
-    const box = document.getElementById('errorBox');
-    if (box) {
-      box.textContent = message || 'Onbekende fout.';
-      box.style.display = 'block';
+    const text = message || 'Onbekende fout.';
+    setBoxMessage('errorBox', text, true);
+
+    if (usePopup) {
+      openPopup(text);
     }
-    if (usePopup) openPopup(message || 'Onbekende fout.');
   }
 
-  function showSuccess(message) {
-    const box = document.getElementById('successBox');
-    if (box) {
-      box.textContent = message || 'Actie uitgevoerd.';
-      box.style.display = 'block';
-      setTimeout(() => { box.style.display = 'none'; }, 4000);
+  function showSuccess(message, options) {
+    const text = message || 'Actie uitgevoerd.';
+    const cfg = Object.assign({
+      popup: true,
+      banner: true,
+      timeoutMs: 4000
+    }, options || {});
+
+    if (cfg.banner) {
+      setBoxMessage('successBox', text, true);
+      window.setTimeout(function () {
+        setBoxMessage('successBox', '', false);
+      }, cfg.timeoutMs);
     }
-    openPopup(message || 'Actie uitgevoerd.');
+
+    if (cfg.popup) {
+      openPopup(text);
+    }
   }
 
   function openPopup(message) {
-    const msg = document.getElementById('popupMessage');
     const overlay = document.getElementById('popupOverlay');
+    const msg = document.getElementById('popupMessage');
+
     if (msg) msg.textContent = message || 'Actie uitgevoerd';
     if (overlay) overlay.style.display = 'flex';
   }
@@ -90,15 +149,15 @@
   }
 
   function openConfirm(message, onConfirm) {
-    const msg = document.getElementById('confirmMessage');
     const overlay = document.getElementById('confirmOverlay');
-    const btn = document.getElementById('confirmOkBtn');
+    const msg = document.getElementById('confirmMessage');
+    const okBtn = document.getElementById('confirmOkBtn');
 
     if (msg) msg.textContent = message || 'Bevestigen?';
     if (overlay) overlay.style.display = 'flex';
 
-    if (btn) {
-      btn.onclick = function () {
+    if (okBtn) {
+      okBtn.onclick = function () {
         closeConfirm();
         if (typeof onConfirm === 'function') onConfirm();
       };
@@ -111,8 +170,9 @@
   }
 
   function showBusy(message) {
-    const msg = document.getElementById('busyMessage');
     const overlay = document.getElementById('busyOverlay');
+    const msg = document.getElementById('busyMessage');
+
     if (msg) msg.textContent = message || 'Backend bezig...';
     if (overlay) overlay.style.display = 'flex';
   }
@@ -122,8 +182,37 @@
     if (overlay) overlay.style.display = 'none';
   }
 
+  function toggleElementVisible(id, visible) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = visible ? '' : 'none';
+  }
+
+  function enableButton(id, enabled) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.disabled = !enabled;
+  }
+
+  function setButtonBusy(id, busy, busyText) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+
+    if (!btn.dataset.originalText) {
+      btn.dataset.originalText = btn.textContent || '';
+    }
+
+    if (busy) {
+      btn.disabled = true;
+      btn.textContent = busyText || 'Backend bezig...';
+    } else {
+      btn.disabled = false;
+      btn.textContent = btn.dataset.originalText || btn.textContent;
+    }
+  }
+
   function serverCall(method, payload) {
-    return new Promise((resolve, reject) => {
+    return new Promise(function (resolve, reject) {
       google.script.run
         .withSuccessHandler(resolve)
         .withFailureHandler(reject)[method](payload);
@@ -131,50 +220,66 @@
   }
 
   async function runAction(options) {
-    const button = options.buttonId ? document.getElementById(options.buttonId) : null;
-    const originalText = button ? button.textContent : '';
+    const cfg = Object.assign({
+      buttonId: '',
+      busyButtonText: 'Backend bezig...',
+      busyMessage: 'Backend bezig...',
+      fallbackErrorMessage: 'Onbekende fout.',
+      payload: {},
+      method: '',
+      showBusyOverlay: true
+    }, options || {});
 
     clearError();
 
-    if (button) {
-      button.disabled = true;
-      button.textContent = options.busyButtonText || 'Backend bezig...';
+    if (cfg.buttonId) {
+      setButtonBusy(cfg.buttonId, true, cfg.busyButtonText);
     }
 
-    showBusy(options.busyMessage || 'Backend bezig...');
+    if (cfg.showBusyOverlay) {
+      showBusy(cfg.busyMessage);
+    }
 
     try {
-      const result = await serverCall(options.method, options.payload || {});
-      hideBusy();
+      const result = await serverCall(cfg.method, cfg.payload || {});
 
-      if (button) {
-        button.disabled = false;
-        button.textContent = originalText;
+      if (cfg.showBusyOverlay) {
+        hideBusy();
       }
 
-      if (typeof options.onSuccess === 'function') {
-        options.onSuccess(result);
+      if (cfg.buttonId) {
+        setButtonBusy(cfg.buttonId, false);
       }
+
+      if (typeof cfg.onSuccess === 'function') {
+        cfg.onSuccess(result);
+      }
+
+      return result;
     } catch (err) {
-      hideBusy();
-
-      if (button) {
-        button.disabled = false;
-        button.textContent = originalText;
+      if (cfg.showBusyOverlay) {
+        hideBusy();
       }
 
-      showError(extractErrorMessage(err, options.fallbackErrorMessage || 'Onbekende fout.'), true);
-
-      if (typeof options.onFailure === 'function') {
-        options.onFailure(err);
+      if (cfg.buttonId) {
+        setButtonBusy(cfg.buttonId, false);
       }
+
+      showError(extractErrorMessage(err, cfg.fallbackErrorMessage), true);
+
+      if (typeof cfg.onFailure === 'function') {
+        cfg.onFailure(err);
+      }
+
+      throw err;
     }
   }
 
   function switchTab(tabName) {
     APP_STATE.activeTab = tabName;
+    localStorage.setItem('shared_active_tab', tabName);
 
-    const map = {
+    const tabMap = {
       deliveries: ['tabDeliveries', 'tabDeliveriesBtn'],
       receipts: ['tabReceipts', 'tabReceiptsBtn'],
       returns: ['tabReturns', 'tabReturnsBtn'],
@@ -183,17 +288,21 @@
       notifications: ['tabNotifications', 'tabNotificationsBtn']
     };
 
-    Object.keys(map).forEach(key => {
-      const panel = document.getElementById(map[key][0]);
-      const btn = document.getElementById(map[key][1]);
+    Object.keys(tabMap).forEach(function (key) {
+      const panel = document.getElementById(tabMap[key][0]);
+      const btn = document.getElementById(tabMap[key][1]);
+
       if (panel) panel.classList.toggle('active', key === tabName);
       if (btn) btn.classList.toggle('active', key === tabName);
     });
   }
 
+  function toIsoTodayClient() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
   function initDefaultDatesShared() {
-    const today = new Date();
-    const iso = today.toISOString().slice(0, 10);
+    const today = toIsoTodayClient();
 
     [
       'receiptDocumentDate',
@@ -202,11 +311,44 @@
       'returnDocumentDate',
       'needIssueDate',
       'busCountDate',
-      'stockAdjustDate'
-    ].forEach(id => {
+      'stockAdjustDate',
+      'mobileRequestDate'
+    ].forEach(function (id) {
       const el = document.getElementById(id);
-      if (el && !el.value) el.value = iso;
+      if (el && !el.value) el.value = today;
     });
+  }
+
+  function initActorInputShared() {
+    const input = document.getElementById('actorInput');
+    if (input && !input.value && window.CURRENT_USER_NAME) {
+      input.value = window.CURRENT_USER_NAME;
+    }
+  }
+
+  function clearSelection() {
+    APP_STATE.selectedGroupKey = null;
+    APP_STATE.selectedReceiptId = null;
+    APP_STATE.selectedReturnId = null;
+    APP_STATE.selectedNeedIssueId = null;
+    APP_STATE.selectedStockArticle = null;
+
+    if (typeof renderSelectedEmpty === 'function') renderSelectedEmpty();
+    if (typeof renderReceiptDetail === 'function') renderReceiptDetail(null);
+    if (typeof renderReturnDetail === 'function') renderReturnDetail(null);
+    if (typeof renderNeedIssueDetail === 'function') renderNeedIssueDetail(null);
+  }
+
+  function clearTechSelection() {
+    APP_STATE.selectedTechDeliveryId = null;
+    APP_STATE.selectedBusCountId = null;
+
+    if (typeof renderSelectedTechDelivery === 'function') renderSelectedTechDelivery(null);
+    if (typeof renderSelectedBusCount === 'function') renderSelectedBusCount(null);
+  }
+
+  function safeFileName(value) {
+    return String(value || '').replace(/[\\/:*?"<>| ]+/g, '_');
   }
 
   document.addEventListener('input', touchUserInteraction, true);
