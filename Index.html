@@ -1,28 +1,32 @@
 <!DOCTYPE html>
-  (function () {
-    const storageKey = 'stockapp.sid';
-    const templateSid =
-      '<?= bootstrapSessionId ?>' ||
-      '<?= currentSessionId ?>' ||
-      '';
-
-    if (templateSid) {
-      sessionStorage.setItem(storageKey, templateSid);
-
-      const url = new URL(window.location.href);
-      if (url.searchParams.has('sid')) {
-        url.searchParams.delete('sid');
-        const qs = url.searchParams.toString();
-        const newUrl = url.pathname + (qs ? '?' + qs : '') + url.hash;
-        history.replaceState({}, document.title, newUrl);
-      }
-    }
-  })();
 <html>
   <head>
     <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <style>
+    <script>
+      (function () {
+        const storageKey = 'stockapp.sid';
+        const templateSid =
+          '<?= bootstrapSessionId ?>' ||
+          '<?= currentSessionId ?>' ||
+          '';
+
+        if (templateSid) {
+          sessionStorage.setItem(storageKey, templateSid);
+
+          const url = new URL(window.location.href);
+          if (url.searchParams.has('sid')) {
+            url.searchParams.delete('sid');
+            const qs = url.searchParams.toString();
+            const newUrl = url.pathname + (qs ? '?' + qs : '') + url.hash;
+            history.replaceState({}, document.title, newUrl);
+          }
+        }
+      })();
+    </script>
+  </head>
+  <body>
       /* =========================================================
          INDEX.HTML — VERSIE 2
          ========================================================= */
