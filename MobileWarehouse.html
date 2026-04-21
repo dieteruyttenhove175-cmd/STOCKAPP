@@ -642,7 +642,15 @@
          MOBILEWAREHOUSE.HTML — BLOK MW-B2 — TEMPLATE VARS
          ========================================================= */
 
-      const SESSION_ID = sessionStorage.getItem('stockapp.sid') || '';
+      const SESSION_ID =
+  sessionStorage.getItem('stockapp.sid') ||
+  '<?= currentSessionId ?>' ||
+  '<?= bootstrapSessionId ?>' ||
+  '';
+
+if (SESSION_ID && !sessionStorage.getItem('stockapp.sid')) {
+  sessionStorage.setItem('stockapp.sid', SESSION_ID);
+}
       const CURRENT_USER_NAME = '<?= currentUserName ?>';
       const CURRENT_USER_ROLE = '<?= currentUserRole ?>';
       const CURRENT_AUTH_MODE = '<?= currentAuthMode ?>';
