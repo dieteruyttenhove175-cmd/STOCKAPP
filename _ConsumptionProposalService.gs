@@ -1,12 +1,236 @@
 /* =========================================================
    45A_ConsumptionProposalService.gs — voorstellen behoefte
    Snapshots + delivery moments -> automatische behoeftevoorstellen
+   Werkt met:
+   1) echte snapshot-tab(s), als die later toegevoegd worden
+   2) fallback op VerbruikImportRaw als snapshotbron
    ========================================================= */
+
+/* ---------------------------------------------------------
+   Snapshot source helpers
+   --------------------------------------------------------- */
+
+function getOptionalSheetByName_(sheetName) {
+  const name = safeText(sheetName);
+  if (!name) return null;
+
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) return null;
+    return ss.getSheetByName(name);
+  } catch (e) {
+    return null;
+  }
+}
+
+function readObjectsFromOptionalSheet_(sheetName) {
+  const sheet = getOptionalSheetByName_(sheetName);
+  if (!sheet) return [];
+
+  const values = sheet.getDataRange().getValues();
+  if (!values || !values.length) return [];
+
+  const headers = values[0].map(h => safeText(h));
+  return values.slice(1).map(row => {
+    const obj = {};
+    headers.forEach((header, i) => {
+      obj[header] = row[i];
+    });
+    return obj;
+  });
+}
+
+function getConsumptionSnapshotSheetNames_() {
+  const names = [];
+
+  // toekomstige snapshot-tabben, als je die later toevoegt
+  if (typeof TABS !== 'undefined') {
+    if (safeText(TABS.CONSUMPTION_SNAPSHOTS)) names.push(TABS.CONSUMPTION_SNAPSHOTS);
+    if (safeText(TABS.CONSUMPTION_SNAPSHOT_RUNS)) names.push(TABS.CONSUMPTION_SNAPSHOT_RUNS);
+  }
+
+  // harde fallback namen als er later manueel tabben bijkomen
+  names.push('VerbruikSnapshots');
+
+  return [...new Set(names.filter(Boolean))];
+}
+
+function mapSnapshotRowFromSnapshotTab_(row) {
+  return {
+    snapshotId: safeText(row.SnapshotID || row.snapshotId || ''),
+    runId: safeText(row.RunID || row.runId || ''),
+    snapshotDatum: toIsoDate(row.SnapshotDatum || row.DocumentDatum || row.snapshotDatum || ''),
+    techniekerCode: safeText(row.TechniekerCode || row.techniekerCode || ''),
+    techniekerNaam: safeText(row.TechniekerNaam || row.techniekerNaam || ''),
+    artikelCode: safeText(row.ArtikelCode || row.artikelCode || ''),
+    artikelOmschrijving: safeText(row.ArtikelOmschrijving || row.artikelOmschrijving || ''),
+    eenheid: safeText(row.Eenheid || row.eenheid || ''),
+    cumulatiefVerbruik: safeNumber(
+      row.CumulatiefVerbruik || row.cumulatiefVerbruik || row.Aantal || row.aantal || 0,
+      0
+    ),
+    bronType: safeText(row.BronType || row.bronType || 'Snapshot'),
+    bronBestand: safeText(row.BronBestand || row.bronBestand || ''),
+    aangemaaktOp: safeText(row.AangemaaktOp || row.aangemaaktOp || ''),
+    opmerking: safeText(row.Opmerking || row.opmerking || '')
+  };
+}
+
+function getSnapshotsFromExplicitSnapshotTabs_() {
+  const rows = [];
+
+  getConsumptionSnapshotSheetNames_().forEach(sheetName => {
+    readObjectsFromOptionalSheet_(sheetName).forEach(row => {
+      const mapped = mapSnapshotRowFromSnapshotTab_(row);
+
+      if (!safeText(mapped.snapshotDatum)) return;
+      if (!safeText(mapped.techniekerCode)) return;
+      if (!safeText(mapped.artikelCode)) return;
+
+      rows.push(mapped);
+    });
+  });
+
+  return rows;
+}
+
+function mapSnapshotFromRawImportRow_(row) {
+  return {
+    snapshotId: '',
+    runId: safeText(row.RunID || ''),
+    snapshotDatum: toIsoDate(row.DocumentDatum || row.documentDatum || ''),
+    techniekerCode: safeText(row.TechniekerCode || row.techniekerCode || ''),
+    techniekerNaam: safeText(row.TechniekerNaam || row.techniekerNaam || ''),
+    artikelCode: safeText(row.ArtikelCode || row.artikelCode || ''),
+    artikelOmschrijving: safeText(row.ArtikelOmschrijving || row.artikelOmschrijving || ''),
+    eenheid: safeText(row.Eenheid || row.eenheid || ''),
+    cumulatiefVerbruik: safeNumber(row.Aantal || row.aantal || 0, 0),
+    bronType: 'ImportRaw',
+    bronBestand: '',
+    aangemaaktOp: safeText(row.VerwerktOp || row.ImportStart || ''),
+    opmerking: ''
+  };
+}
+
+function aggregateRawImportRowsToSnapshots_(rows) {
+  const grouped = {};
+
+  (rows || []).forEach(row => {
+    const key = [
+      safeText(row.snapshotDatum),
+      normalizeRef(row.techniekerCode),
+      safeText(row.artikelCode)
+    ].join('|');
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        snapshotId: '',
+        runId: safeText(row.runId),
+        snapshotDatum: safeText(row.snapshotDatum),
+        techniekerCode: safeText(row.techniekerCode),
+        techniekerNaam: safeText(row.techniekerNaam),
+        artikelCode: safeText(row.artikelCode),
+        artikelOmschrijving: safeText(row.artikelOmschrijving),
+        eenheid: safeText(row.eenheid),
+        cumulatiefVerbruik: safeNumber(row.cumulatiefVerbruik, 0),
+        bronType: 'ImportRaw',
+        bronBestand: '',
+        aangemaaktOp: safeText(row.aangemaaktOp),
+        opmerking: ''
+      };
+      return;
+    }
+
+    // Neem hoogste waarde als snapshot voor die dag/artikel/technieker
+    grouped[key].cumulatiefVerbruik = Math.max(
+      safeNumber(grouped[key].cumulatiefVerbruik, 0),
+      safeNumber(row.cumulatiefVerbruik, 0)
+    );
+
+    if (!grouped[key].techniekerNaam && row.techniekerNaam) {
+      grouped[key].techniekerNaam = safeText(row.techniekerNaam);
+    }
+
+    if (!grouped[key].artikelOmschrijving && row.artikelOmschrijving) {
+      grouped[key].artikelOmschrijving = safeText(row.artikelOmschrijving);
+    }
+
+    if (!grouped[key].eenheid && row.eenheid) {
+      grouped[key].eenheid = safeText(row.eenheid);
+    }
+
+    if (safeText(row.aangemaaktOp) > safeText(grouped[key].aangemaaktOp)) {
+      grouped[key].aangemaaktOp = safeText(row.aangemaaktOp);
+    }
+  });
+
+  return Object.keys(grouped).map(key => grouped[key]);
+}
+
+function getSnapshotsFromImportRawFallback_() {
+  if (typeof readObjectsSafe !== 'function') return [];
+  if (typeof TABS === 'undefined' || !safeText(TABS.CONSUMPTION_IMPORT_RAW)) return [];
+
+  const rawRows = readObjectsSafe(TABS.CONSUMPTION_IMPORT_RAW)
+    .map(mapSnapshotFromRawImportRow_)
+    .filter(row =>
+      safeText(row.snapshotDatum) &&
+      safeText(row.techniekerCode) &&
+      safeText(row.artikelCode) &&
+      safeNumber(row.cumulatiefVerbruik, 0) >= 0
+    );
+
+  return aggregateRawImportRowsToSnapshots_(rawRows);
+}
+
+function getAllConsumptionSnapshots() {
+  const snapshotRows = getSnapshotsFromExplicitSnapshotTabs_();
+  if (snapshotRows.length) {
+    return snapshotRows.sort((a, b) =>
+      `${safeText(a.snapshotDatum)} ${safeText(a.techniekerCode)} ${safeText(a.artikelCode)} ${safeText(a.aangemaaktOp)}`.localeCompare(
+        `${safeText(b.snapshotDatum)} ${safeText(b.techniekerCode)} ${safeText(b.artikelCode)} ${safeText(b.aangemaaktOp)}`
+      )
+    );
+  }
+
+  const fallbackRows = getSnapshotsFromImportRawFallback_();
+  return fallbackRows.sort((a, b) =>
+    `${safeText(a.snapshotDatum)} ${safeText(a.techniekerCode)} ${safeText(a.artikelCode)} ${safeText(a.aangemaaktOp)}`.localeCompare(
+      `${safeText(b.snapshotDatum)} ${safeText(b.techniekerCode)} ${safeText(b.artikelCode)} ${safeText(b.aangemaaktOp)}`
+    )
+  );
+}
+
+function getSnapshotsForTechnicianArticle_(techniekerCode, artikelCode) {
+  return getAllConsumptionSnapshots()
+    .filter(row =>
+      normalizeRef(row.techniekerCode) === normalizeRef(techniekerCode) &&
+      safeText(row.artikelCode) === safeText(artikelCode)
+    )
+    .sort((a, b) =>
+      `${safeText(a.snapshotDatum)} ${safeText(a.aangemaaktOp)}`.localeCompare(
+        `${safeText(b.snapshotDatum)} ${safeText(b.aangemaaktOp)}`
+      )
+    );
+}
+
+function getLatestConsumptionSnapshotOnOrBefore_(techniekerCode, artikelCode, cutoffIsoDate) {
+  const cutoff = safeText(cutoffIsoDate);
+  if (!cutoff) return null;
+
+  const rows = getSnapshotsForTechnicianArticle_(techniekerCode, artikelCode)
+    .filter(row => safeText(row.snapshotDatum) <= cutoff);
+
+  return rows.length ? rows[rows.length - 1] : null;
+}
+
+/* ---------------------------------------------------------
+   Delivery selection
+   --------------------------------------------------------- */
 
 function buildAutoNeedDeliveryMoments_(daysAhead) {
   const todayIso = toIsoDate(nowDate());
   const maxIso = addDaysToIsoDate(todayIso, safeNumber(daysAhead, 7));
-
   const moments = [];
 
   getActiveTechnicians().forEach(technician => {
@@ -46,8 +270,14 @@ function buildAutoNeedDeliveryMoments_(daysAhead) {
     });
   });
 
-  return moments.sort((a, b) => safeText(a.deliverySortKey).localeCompare(safeText(b.deliverySortKey)));
+  return moments.sort((a, b) =>
+    safeText(a.deliverySortKey).localeCompare(safeText(b.deliverySortKey))
+  );
 }
+
+/* ---------------------------------------------------------
+   Proposal calculations
+   --------------------------------------------------------- */
 
 function getSnapshotArticleCodesForTechnician_(techniekerCode, cutoffIso) {
   const cutoff = safeText(cutoffIso);
@@ -70,6 +300,7 @@ function getSnapshotArticleCodesForTechnician_(techniekerCode, cutoffIso) {
 function getTransferredNeedQtyFromMobileToBus_(techniekerCode, artikelCode, fromIsoExclusive, toIsoInclusive) {
   const techCode = safeText(techniekerCode);
   const articleCode = safeText(artikelCode);
+
   if (!techCode || !articleCode) return 0;
 
   const toLoc = getBusLocationCode(techCode);
@@ -107,9 +338,7 @@ function getTransferredNeedQtyFromMobileToBus_(techniekerCode, artikelCode, from
 }
 
 function getOpenNeedShortfallForPeriod_(techniekerCode, artikelCode, fromIsoExclusive, toIsoInclusive) {
-  // TODO:
-  // Hier later open rest van vorige levering verwerken.
-  // Voor nu 0 zodat de eerste automatische flow stabiel blijft.
+  // later uitbreidbaar
   return 0;
 }
 
@@ -162,10 +391,7 @@ function buildAutoNeedProposalRows_(daysAhead) {
       const article = getArticleMaster(artikelCode) || {};
 
       rows.push({
-        proposalKey: [
-          moment.key,
-          safeText(artikelCode)
-        ].join('|'),
+        proposalKey: [moment.key, safeText(artikelCode)].join('|'),
         techniekerCode: moment.techniekerCode,
         techniekerNaam: moment.techniekerNaam,
         deliveryId: moment.deliveryId,
@@ -211,6 +437,10 @@ function getAutoNeedProposals(payload) {
     proposals: buildAutoNeedProposalRows_(daysAhead)
   };
 }
+
+/* ---------------------------------------------------------
+   Need issue creation from proposal
+   --------------------------------------------------------- */
 
 function findOpenAutoNeedIssueForMoment_(techniekerCode, deliveryDateIso) {
   return getAllNeedIssues().find(issue =>
@@ -268,8 +498,8 @@ function createNeedIssueFromProposal(payload) {
 
   const sessionId = getPayloadSessionId(payload);
   const user = assertWarehouseOrMobileAccess(sessionId);
-
   const proposal = payload.proposal || {};
+
   const techniekerCode = safeText(proposal.techniekerCode);
   const deliveryDateIso = safeText(proposal.deliveryDateIso);
   const voorstelAantal = safeNumber(proposal.voorstelAantal, 0);
