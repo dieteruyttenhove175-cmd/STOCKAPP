@@ -1,4 +1,3 @@
-<script>
   function renderCentralSection(data) {
     APP_STATE.centralData = data || {};
     renderCentralWarehouseTable((APP_STATE.centralData.centralWarehouse) || []);
@@ -241,4 +240,3 @@
       onSuccess: result => showSuccess(result.message)
     });
   }
-</script>

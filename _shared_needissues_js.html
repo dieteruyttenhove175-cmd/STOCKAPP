@@ -1,4 +1,4 @@
-<script>
+
   function renderNeedIssuesSection(data) {
     APP_STATE.needIssueData = data || {};
     renderNeedIssueTechnicians((APP_STATE.needIssueData.technicians) || []);
@@ -318,4 +318,3 @@
       onSuccess: result => showSuccess(result.message)
     });
   }
-</script>

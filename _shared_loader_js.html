@@ -1,4 +1,4 @@
-<script>
+
   function toggleElementVisible_(id, visible) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -159,6 +159,7 @@
     }
   }
 
+<script>
   async function loadAll(fullRender) {
     if (!ensureSession()) return;
 
@@ -167,49 +168,62 @@
     }
 
     try {
-      const results = await Promise.all([
-        new Promise((resolve, reject) => {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getWarehouseData(window.SESSION_ID);
-        }),
-        new Promise((resolve, reject) => {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getReceiptsData(window.SESSION_ID);
-        }),
-        new Promise((resolve, reject) => {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getReturnsData(window.SESSION_ID);
-        }),
-        new Promise((resolve, reject) => {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getNeedIssueData(window.SESSION_ID);
-        }),
-        new Promise((resolve, reject) => {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getAutoNeedProposals(withSession({}));
-        })
-      ]);
+      console.log('START getWarehouseData');
+      const warehouse = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .getWarehouseData(window.SESSION_ID);
+      });
+      console.log('OK getWarehouseData', warehouse);
 
-      APP_STATE.warehouseData = results[0] || {};
-      APP_STATE.receiptsData = results[1] || {};
-      APP_STATE.returnsData = results[2] || {};
-      APP_STATE.needIssueData = results[3] || {};
-      APP_STATE.autoNeedProposalPayload = results[4] || { proposals: [] };
+      console.log('START getReceiptsData');
+      const receipts = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .getReceiptsData(window.SESSION_ID);
+      });
+      console.log('OK getReceiptsData', receipts);
+
+      console.log('START getReturnsData');
+      const returnsData = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .getReturnsData(window.SESSION_ID);
+      });
+      console.log('OK getReturnsData', returnsData);
+
+      console.log('START getNeedIssueData');
+      const needIssues = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .getNeedIssueData(window.SESSION_ID);
+      });
+      console.log('OK getNeedIssueData', needIssues);
+
+      console.log('START getAutoNeedProposals');
+      const proposals = await new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          .getAutoNeedProposals(withSession({}));
+      });
+      console.log('OK getAutoNeedProposals', proposals);
+
+      APP_STATE.warehouseData = warehouse || {};
+      APP_STATE.receiptsData = receipts || {};
+      APP_STATE.returnsData = returnsData || {};
+      APP_STATE.needIssueData = needIssues || {};
+      APP_STATE.autoNeedProposalPayload = proposals || { proposals: [] };
 
       renderAllSections_();
       switchTab(APP_STATE.activeTab || 'deliveries');
     } catch (err) {
-      showError(extractErrorMessage(err, 'Fout bij laden gegevens.'), !!fullRender);
+      console.error('LOAD ERROR', err);
+      showError(extractErrorMessage(err, 'Fout bij laden gegevens.'), true);
     } finally {
       if (fullRender) {
         hideBusy();
@@ -243,4 +257,3 @@
 
     loadAll(false);
   }, 30000);
-</script>
