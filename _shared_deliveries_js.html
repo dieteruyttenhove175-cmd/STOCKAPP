@@ -21,7 +21,10 @@
     APP_STATE.warehouseData = APP_STATE.warehouseData || {};
     APP_STATE.warehouseData.upcomingGroups = (data && data.upcomingGroups) || [];
     APP_STATE.warehouseData.stats = (data && data.stats) || {};
-    renderDeliveryStats();
+    APP_STATE.warehouseData.notifications = (data && data.notifications) || [];
+    APP_STATE.warehouseData.deltaCountAlerts = (data && data.deltaCountAlerts) || [];
+    APP_STATE.warehouseData.busStock = (data && data.busStock) || [];
+
     renderGroups(APP_STATE.warehouseData.upcomingGroups || []);
 
     const groups = APP_STATE.warehouseData.upcomingGroups || [];
@@ -37,25 +40,6 @@
     }
 
     renderSelectedGroup(selectedGroup);
-  }
-
-  function renderDeliveryStats() {
-    const stats = (APP_STATE.warehouseData && APP_STATE.warehouseData.stats) || {};
-    const el = document.getElementById('stats');
-    if (!el) return;
-
-    const currentHtml = el.innerHTML || '';
-
-    if (currentHtml && currentHtml.indexOf('Open beleveringen') >= 0) {
-      el.innerHTML = `
-        <div class="stat"><div class="label">Open beleveringen</div><div class="value">${stats.open || 0}</div></div>
-        <div class="stat"><div class="label">Klaargezet</div><div class="value">${stats.klaargezet || 0}</div></div>
-        <div class="stat"><div class="label">Meegegeven</div><div class="value">${stats.meegegeven || 0}</div></div>
-        <div class="stat"><div class="label">Niet afgehaald</div><div class="value">${stats.nietAfgehaald || 0}</div></div>
-        <div class="stat"><div class="label">Vandaag</div><div class="value">${stats.vandaag || 0}</div></div>
-        <div class="stat"><div class="label">Teltaken</div><div class="value">${stats.telAlerts || 0}</div></div>
-      `;
-    }
   }
 
   function renderGroups(groups) {
@@ -93,6 +77,7 @@
   function renderSelectedEmpty() {
     const info = document.getElementById('selectedInfo');
     const body = document.getElementById('selectedLinesBody');
+
     if (info) info.textContent = 'Nog geen beleveringsmoment geselecteerd.';
     if (body) body.innerHTML = `<tr><td colspan="7" class="muted">Geen gegevens.</td></tr>`;
 
@@ -181,6 +166,7 @@
     const prov = document.getElementById('prov-' + orderId);
     const deltaEl = document.getElementById('delta-' + orderId);
     if (!prov || !deltaEl) return;
+
     const provided = Number(prov.value || 0);
     deltaEl.textContent = String(Math.max(gevraagdDozen - provided, 0));
   }
@@ -238,6 +224,7 @@
 
       hideBusy();
       showSuccess(`${result.message} (${result.updated || 0} lijnen)`);
+      loadAll(false);
     } catch (err) {
       hideBusy();
       showError(extractErrorMessage(err, 'Fout bij opslaan voorbereiding/status.'), true);
@@ -255,7 +242,11 @@
   function saveAndSetNotPicked() {
     const note = prompt('Opmerking voor niet afgehaald:', 'Niet afgehaald');
     if (note === null) return;
-    openConfirm('Bevestig: belevering op Niet afgehaald zetten?', () => savePreparationAndThen('Niet afgehaald', note || 'Niet afgehaald'));
+
+    openConfirm(
+      'Bevestig: belevering op Niet afgehaald zetten?',
+      () => savePreparationAndThen('Niet afgehaald', note || 'Niet afgehaald')
+    );
   }
 
   function exportSelectedCsv() {
@@ -300,14 +291,10 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `magazijnbon_${safeFileName_(group.techniekerCode || 'groep')}_${safeFileName_(group.klaarTegenSort || 'export')}.csv`;
+    a.download = `magazijnbon_${safeFileName(group.techniekerCode || 'groep')}_${safeFileName(group.klaarTegenSort || 'export')}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }
-
-  function safeFileName_(value) {
-    return String(value || '').replace(/[\\/:*?"<>| ]+/g, '_');
   }
 </script>
