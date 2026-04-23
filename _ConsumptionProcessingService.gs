@@ -1,508 +1,582 @@
 /* =========================================================
-   45_ConsumptionProcessingService.gs — verwerking verbruiksimport
-   Raw import -> Verbruiken / VerbruikLijnen (nog niet geboekt)
+   45_ConsumptionProcessingService.gs
+   Refactor: consumption processing service
+   Doel:
+   - geïmporteerde verbruiksregels verwerken tot boekbare voorstellen
+   - validatie per technieker, artikel en busstock
+   - bundelen per technieker en datum
+   - voorbereiding op boeking naar mutaties
    ========================================================= */
 
 /* ---------------------------------------------------------
-   Raw mapping
+   Tabs / fallbacks
    --------------------------------------------------------- */
 
-function mapConsumptionImportRaw(row) {
+function getConsumptionProcessBatchTab_() {
+  return TABS.CONSUMPTION_PROCESS_BATCHES || 'VerbruiksProcessBatches';
+}
+
+function getConsumptionProcessLineTab_() {
+  return TABS.CONSUMPTION_PROCESS_LINES || 'VerbruiksProcessLijnen';
+}
+
+function getConsumptionProcessStatusOpen_() {
+  if (typeof CONSUMPTION_PROCESS_STATUS !== 'undefined' && CONSUMPTION_PROCESS_STATUS && CONSUMPTION_PROCESS_STATUS.OPEN) {
+    return CONSUMPTION_PROCESS_STATUS.OPEN;
+  }
+  return 'Open';
+}
+
+function getConsumptionProcessStatusReady_() {
+  if (typeof CONSUMPTION_PROCESS_STATUS !== 'undefined' && CONSUMPTION_PROCESS_STATUS && CONSUMPTION_PROCESS_STATUS.READY) {
+    return CONSUMPTION_PROCESS_STATUS.READY;
+  }
+  return 'Klaar';
+}
+
+function getConsumptionProcessStatusBooked_() {
+  if (typeof CONSUMPTION_PROCESS_STATUS !== 'undefined' && CONSUMPTION_PROCESS_STATUS && CONSUMPTION_PROCESS_STATUS.BOOKED) {
+    return CONSUMPTION_PROCESS_STATUS.BOOKED;
+  }
+  return 'Geboekt';
+}
+
+function getConsumptionProcessStatusClosed_() {
+  if (typeof CONSUMPTION_PROCESS_STATUS !== 'undefined' && CONSUMPTION_PROCESS_STATUS && CONSUMPTION_PROCESS_STATUS.CLOSED) {
+    return CONSUMPTION_PROCESS_STATUS.CLOSED;
+  }
+  return 'Gesloten';
+}
+
+function getConsumptionValidationOk_() {
+  return 'OK';
+}
+
+function getConsumptionValidationWarning_() {
+  return 'WAARSCHUWING';
+}
+
+function getConsumptionValidationError_() {
+  return 'FOUT';
+}
+
+function makeConsumptionProcessBatchId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'CPB-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+function makeConsumptionProcessLineId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'CPL-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+/* ---------------------------------------------------------
+   Mapping
+   --------------------------------------------------------- */
+
+function mapConsumptionProcessBatch(row) {
   return {
-    runId: safeText(row.RunID),
-    bronRijNr: safeNumber(row.BronRijNr, 0),
-    documentDatum: toIsoDate(row.DocumentDatum),
-    techniekerCode: safeText(row.TechniekerCode),
-    techniekerNaam: safeText(row.TechniekerNaam),
-    werfRef: safeText(row.WerfRef),
-    artikelCode: safeText(row.ArtikelCode),
-    artikelOmschrijving: safeText(row.ArtikelOmschrijving),
-    aantal: safeNumber(row.Aantal, 0),
-    eenheid: safeText(row.Eenheid),
-    bronHash: safeText(row.BronHash),
-    validatieStatus: safeText(row.ValidatieStatus),
-    validatieFout: safeText(row.ValidatieFout),
-    boekStatus: safeText(row.BoekStatus),
-    boekFout: safeText(row.BoekFout),
-    verbruikId: safeText(row.VerbruikID),
-    verwerktOp: safeText(row.VerwerktOp),
-    rawJson: safeText(row.RawJson)
+    processBatchId: safeText(row.ProcessBatchID || row.ProcessBatchId || row.ID),
+    importBatchId: safeText(row.ImportBatchID || row.ImportBatchId),
+    sourceType: safeText(row.SourceType || 'Import'),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    status: safeText(row.Status || getConsumptionProcessStatusOpen_()),
+    actor: safeText(row.Actor),
+    opmerking: safeText(row.Opmerking),
+    rawLineCount: safeNumber(row.RawLineCount, 0),
+    processedLineCount: safeNumber(row.ProcessedLineCount, 0),
+    warningCount: safeNumber(row.WarningCount, 0),
+    errorCount: safeNumber(row.ErrorCount, 0),
+    aangemaaktOp: safeText(row.AangemaaktOp),
+    aangemaaktOpRaw: safeText(row.AangemaaktOpRaw || row.AangemaaktOp),
+    geboektOp: safeText(row.GeboektOp),
   };
 }
 
-function readConsumptionImportRawRowsWithMeta() {
-  const sheet = getSheetOrThrow(TABS.CONSUMPTION_IMPORT_RAW);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) return [];
-
-  const headers = values[0].map(h => safeText(h));
-
-  return values.slice(1).map((row, idx) => {
-    const obj = {};
-    headers.forEach((header, i) => {
-      obj[header] = row[i];
-    });
-
-    return {
-      ...mapConsumptionImportRaw(obj),
-      _sheetRowIndex: idx + 2
-    };
-  });
-}
-
-function assertConsumptionImportRawProcessingColumns() {
-  const headers = getHeaders(TABS.CONSUMPTION_IMPORT_RAW);
-
-  ['VerbruikID', 'VerwerktOp'].forEach(requiredHeader => {
-    if (!headers.includes(requiredHeader)) {
-      throw new Error(`Tab ${TABS.CONSUMPTION_IMPORT_RAW} mist verplichte kolom ${requiredHeader}.`);
-    }
-  });
-}
-
-/* ---------------------------------------------------------
-   Helpers — bronselectie
-   --------------------------------------------------------- */
-
-function getConsumptionImportRunRows(runId) {
-  const id = safeText(runId);
-  return readConsumptionImportRawRowsWithMeta()
-    .filter(row => !id || row.runId === id);
-}
-
-function getPendingConsumptionImportRows(runId) {
-  return getConsumptionImportRunRows(runId).filter(row => {
-    if (row.verbruikId) return false;
-    if (row.validatieStatus === IMPORT_VALIDATION_STATUS.DUPLICATE) return false;
-    if (row.validatieStatus === IMPORT_VALIDATION_STATUS.ERROR) return false;
-    if (row.validatieStatus === IMPORT_VALIDATION_STATUS.SKIPPED) return false;
-    return true;
-  });
-}
-
-function getLatestConsumptionImportRunId() {
-  const runs = readObjectsSafe(TABS.CONSUMPTION_IMPORT_RUNS)
-    .map(row => ({
-      runId: safeText(row.RunID),
-      importStart: safeText(row.ImportStart)
-    }))
-    .filter(x => x.runId)
-    .sort((a, b) => safeText(b.importStart).localeCompare(safeText(a.importStart)));
-
-  return runs.length ? runs[0].runId : '';
-}
-
-/* ---------------------------------------------------------
-   Helpers — masterdata
-   --------------------------------------------------------- */
-
-function buildConsumptionTechnicianMap() {
-  const map = {};
-  getActiveTechnicians().forEach(item => {
-    map[normalizeRef(item.code)] = item;
-  });
-  return map;
-}
-
-function buildConsumptionArticleMap() {
-  const map = {};
-  readObjectsSafe(TABS.SUPPLIER_ARTICLES)
-    .map(mapSupplierArticle)
-    .filter(item => item.actief !== false)
-    .forEach(item => {
-      map[safeText(item.artikelCode)] = item;
-    });
-  return map;
-}
-
-function isArticleAllowedForConsumptionScope(article) {
-  if (!article) return false;
-
-  const allowedScopesRaw = safeText(getConsumptionImportConfigValue('ToegelatenCategorieen', ''));
-  if (!allowedScopesRaw) return true;
-
-  const allowedScopes = allowedScopesRaw
-    .split(',')
-    .map(x => safeText(x).toUpperCase())
-    .filter(Boolean);
-
-  if (!allowedScopes.length) return true;
-
-  const articleScope = safeText(
-    article.CategorieScope ||
-    article.ProjectScope ||
-    article.Categorie ||
-    article.CAT ||
-    article.Cat ||
-    article.Scope
-  ).toUpperCase();
-
-  if (!articleScope) return true;
-  return allowedScopes.includes(articleScope);
-}
-
-/* ---------------------------------------------------------
-   Business-validatie
-   --------------------------------------------------------- */
-
-function validateConsumptionRawBusinessRow(rawRow, technicianMap, articleMap) {
-  const errors = [];
-
-  const tech = technicianMap[normalizeRef(rawRow.techniekerCode)] || null;
-  const article = articleMap[safeText(rawRow.artikelCode)] || null;
-
-  if (!rawRow.documentDatum) {
-    errors.push('Documentdatum ontbreekt of is ongeldig');
-  }
-
-  if (!rawRow.techniekerCode) {
-    errors.push('TechniekerCode ontbreekt');
-  } else if (!tech) {
-    errors.push('TechniekerCode niet gevonden of niet actief');
-  }
-
-  if (!rawRow.artikelCode) {
-    errors.push('ArtikelCode ontbreekt');
-  } else if (!article) {
-    errors.push('ArtikelCode niet gevonden');
-  }
-
-  if (safeNumber(rawRow.aantal, 0) <= 0) {
-    errors.push('Aantal moet groter zijn dan 0');
-  }
-
-  if (article && !isArticleAllowedForConsumptionScope(article)) {
-    errors.push('Artikel valt buiten toegelaten scope');
-  }
-
+function mapConsumptionProcessLine(row) {
   return {
-    isValid: !errors.length,
-    errors,
-    technician: tech,
-    article: article
+    processLineId: safeText(row.ProcessLineID || row.ProcessLineId || row.ID),
+    processBatchId: safeText(row.ProcessBatchID || row.ProcessBatchId),
+    importBatchId: safeText(row.ImportBatchID || row.ImportBatchId),
+    techniekerCode: safeText(row.TechniekerCode || row.TechnicianCode || row.TechCode),
+    techniekerNaam: safeText(row.TechniekerNaam || row.TechnicianName),
+    werkorderNr: safeText(row.WerkorderNr || row.WorkOrderNr || row.OrderNr),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    artikelCode: safeText(row.ArtikelCode || row.ArtikelNr),
+    artikelOmschrijving: safeText(row.ArtikelOmschrijving || row.Artikel),
+    typeMateriaal: safeText(row.TypeMateriaal || determineMaterialTypeFromArticle(safeText(row.ArtikelCode || row.ArtikelNr))),
+    eenheid: safeText(row.Eenheid || row.Unit),
+    aantal: safeNumber(row.Aantal || row.Quantity, 0),
+    systemBusAantal: safeNumber(row.SystemBusAantal || row.SystemQty, 0),
+    projectedBusAantal: safeNumber(row.ProjectedBusAantal || row.ProjectedQty, 0),
+    validationStatus: safeText(row.ValidationStatus || getConsumptionValidationOk_()),
+    validationMessage: safeText(row.ValidationMessage || ''),
+    bookingGroupKey: safeText(row.BookingGroupKey || ''),
+    opmerking: safeText(row.Opmerking),
   };
 }
 
 /* ---------------------------------------------------------
-   Raw update
+   Read layer
    --------------------------------------------------------- */
 
-function updateConsumptionRawProcessingResults(rawResults) {
-  if (!(rawResults || []).length) return { success: true, updated: 0 };
+function getAllConsumptionProcessBatches() {
+  return readObjectsSafe(getConsumptionProcessBatchTab_())
+    .map(mapConsumptionProcessBatch)
+    .sort(function (a, b) {
+      return (
+        safeText(b.documentDatumIso).localeCompare(safeText(a.documentDatumIso)) ||
+        safeText(b.aangemaaktOpRaw).localeCompare(safeText(a.aangemaaktOpRaw)) ||
+        safeText(b.processBatchId).localeCompare(safeText(a.processBatchId))
+      );
+    });
+}
 
-  const sheet = getSheetOrThrow(TABS.CONSUMPTION_IMPORT_RAW);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) throw new Error('Tab VerbruikImportRaw is leeg.');
+function getAllConsumptionProcessLines() {
+  return readObjectsSafe(getConsumptionProcessLineTab_())
+    .map(mapConsumptionProcessLine)
+    .sort(function (a, b) {
+      return (
+        safeText(a.processBatchId).localeCompare(safeText(b.processBatchId)) ||
+        safeText(a.techniekerCode).localeCompare(safeText(b.techniekerCode)) ||
+        safeText(a.documentDatumIso).localeCompare(safeText(b.documentDatumIso)) ||
+        safeText(a.artikelCode).localeCompare(safeText(b.artikelCode))
+      );
+    });
+}
 
-  const headers = values[0].map(h => safeText(h));
-  const col = getColMap(headers);
+function getConsumptionProcessBatchById(processBatchId) {
+  var id = safeText(processBatchId);
+  if (!id) return null;
 
-  let updated = 0;
+  return getAllConsumptionProcessBatches().find(function (item) {
+    return safeText(item.processBatchId) === id;
+  }) || null;
+}
 
-  rawResults.forEach(result => {
-    const rowIndex = safeNumber(result._sheetRowIndex, 0);
-    if (!rowIndex || rowIndex < 2 || rowIndex > values.length) return;
+function getConsumptionProcessLinesByBatchId(processBatchId) {
+  var id = safeText(processBatchId);
+  return getAllConsumptionProcessLines().filter(function (item) {
+    return safeText(item.processBatchId) === id;
+  });
+}
 
-    const arrIndex = rowIndex - 1;
+function buildConsumptionProcessBatchesWithLines(headers, lines) {
+  var lineMap = {};
 
-    if (col['ValidatieStatus'] !== undefined) values[arrIndex][col['ValidatieStatus']] = safeText(result.validatieStatus);
-    if (col['ValidatieFout'] !== undefined) values[arrIndex][col['ValidatieFout']] = safeText(result.validatieFout);
-    if (col['VerbruikID'] !== undefined) values[arrIndex][col['VerbruikID']] = safeText(result.verbruikId);
-    if (col['VerwerktOp'] !== undefined) values[arrIndex][col['VerwerktOp']] = safeText(result.verwerktOp);
-
-    updated++;
+  (lines || []).forEach(function (line) {
+    var id = safeText(line.processBatchId);
+    if (!lineMap[id]) lineMap[id] = [];
+    lineMap[id].push(line);
   });
 
-  if (values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
-  }
+  return (headers || []).map(function (header) {
+    var processLines = lineMap[safeText(header.processBatchId)] || [];
 
-  return { success: true, updated };
+    return Object.assign({}, header, {
+      lines: processLines,
+      lineCount: processLines.length,
+      totaalAantal: processLines.reduce(function (sum, line) {
+        return sum + safeNumber(line.aantal, 0);
+      }, 0),
+      techniekerCount: Object.keys(
+        processLines.reduce(function (acc, line) {
+          acc[safeText(line.techniekerCode)] = true;
+          return acc;
+        }, {})
+      ).length,
+    });
+  });
+}
+
+function getConsumptionProcessBatchWithLines(processBatchId) {
+  var header = getConsumptionProcessBatchById(processBatchId);
+  if (!header) return null;
+  return buildConsumptionProcessBatchesWithLines(
+    [header],
+    getConsumptionProcessLinesByBatchId(processBatchId)
+  )[0] || null;
 }
 
 /* ---------------------------------------------------------
-   Groepering
+   Helpers
    --------------------------------------------------------- */
 
-function buildConsumptionProcessingGroupKey(rawRow) {
+function assertConsumptionProcessingAccess_(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.WAREHOUSE, ROLE.MANAGER, ROLE.MOBILE_WAREHOUSE],
+    'Geen rechten voor verbruiksverwerking.'
+  );
+  return user;
+}
+
+function resolveConsumptionImportBatchWithLines_(importBatchId) {
+  var id = safeText(importBatchId);
+  if (!id) throw new Error('ImportBatchId ontbreekt.');
+
+  if (typeof getConsumptionImportBatchWithLines !== 'function') {
+    throw new Error('Consumption import service ontbreekt. Werk eerst het importblok in.');
+  }
+
+  var batch = getConsumptionImportBatchWithLines(id);
+  if (!batch) {
+    throw new Error('Importbatch niet gevonden.');
+  }
+
+  return batch;
+}
+
+function getBusSnapshotForConsumption_(techniekerCode, artikelCode) {
+  var code = safeText(techniekerCode);
+  var article = safeText(artikelCode);
+  if (!code || !article) return 0;
+
+  if (typeof buildBusStockMapForTechnician !== 'function') {
+    return 0;
+  }
+
+  var stockMap = buildBusStockMapForTechnician(code);
+  return stockMap[article] ? safeNumber(stockMap[article].voorraadBus, 0) : 0;
+}
+
+function buildConsumptionBookingGroupKey_(line) {
   return [
-    safeText(rawRow.documentDatum),
-    safeText(rawRow.techniekerCode),
-    safeText(rawRow.werfRef)
+    safeText(line.techniekerCode),
+    safeText(line.documentDatumIso),
+    safeText(line.werkorderNr)
   ].join('|');
 }
 
-function makeImportedConsumptionId(runId, groupIndex) {
-  return `VIMP-${safeText(runId)}-${String(groupIndex).padStart(3, '0')}`;
-}
+function buildConsumptionProjectionLines_(importLines) {
+  var runningBus = {};
+  var projected = [];
 
-function groupValidatedConsumptionRows(validatedRows) {
-  const groups = {};
+  (importLines || []).forEach(function (line) {
+    var techCode = safeText(line.techniekerCode);
+    var articleCode = safeText(line.artikelCode);
+    var stateKey = techCode + '|' + articleCode;
 
-  (validatedRows || []).forEach(row => {
-    const key = buildConsumptionProcessingGroupKey(row);
-
-    if (!groups[key]) {
-      groups[key] = {
-        key,
-        documentDatum: row.documentDatum,
-        techniekerCode: row.techniekerCode,
-        techniekerNaam: row._matchedTechnician ? row._matchedTechnician.naam : row.techniekerNaam,
-        werfRef: row.werfRef,
-        rows: []
-      };
+    if (runningBus[stateKey] === undefined) {
+      runningBus[stateKey] = getBusSnapshotForConsumption_(techCode, articleCode);
     }
 
-    groups[key].rows.push(row);
-  });
+    var currentQty = safeNumber(runningBus[stateKey], 0);
+    var consumeQty = safeNumber(line.aantal, 0);
+    var projectedQty = currentQty - consumeQty;
 
-  return Object.keys(groups)
-    .map(key => groups[key])
-    .sort((a, b) =>
-      `${safeText(a.documentDatum)} ${safeText(a.techniekerCode)} ${safeText(a.werfRef)}`.localeCompare(
-        `${safeText(b.documentDatum)} ${safeText(b.techniekerCode)} ${safeText(b.werfRef)}`
-      )
-    );
-}
+    var validationStatus = getConsumptionValidationOk_();
+    var validationMessage = '';
 
-function aggregateGroupLines(group) {
-  const map = {};
-
-  (group.rows || []).forEach(row => {
-    const code = safeText(row.artikelCode);
-    if (!code) return;
-
-    if (!map[code]) {
-      map[code] = {
-        artikelCode: code,
-        artikelOmschrijving: safeText(row.artikelOmschrijving),
-        eenheid: safeText(row.eenheid),
-        aantal: 0,
-        bronHashes: [],
-        bronRijNrs: []
-      };
+    if (consumeQty <= 0) {
+      validationStatus = getConsumptionValidationError_();
+      validationMessage = 'Verbruik moet groter zijn dan 0.';
+    } else if (currentQty <= 0) {
+      validationStatus = getConsumptionValidationWarning_();
+      validationMessage = 'Geen bekende busvoorraad voor dit artikel.';
+    } else if (projectedQty < 0) {
+      validationStatus = getConsumptionValidationWarning_();
+      validationMessage = 'Verbruik overschrijdt huidige busvoorraad.';
     }
 
-    map[code].aantal += safeNumber(row.aantal, 0);
-    map[code].bronHashes.push(safeText(row.bronHash));
-    map[code].bronRijNrs.push(safeNumber(row.bronRijNr, 0));
+    projected.push(Object.assign({}, line, {
+      systemBusAantal: currentQty,
+      projectedBusAantal: projectedQty,
+      validationStatus: validationStatus,
+      validationMessage: validationMessage,
+      bookingGroupKey: buildConsumptionBookingGroupKey_(line),
+    }));
+
+    runningBus[stateKey] = projectedQty;
   });
 
-  return Object.keys(map)
-    .map(key => map[key])
-    .sort((a, b) => safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving)));
+  return projected;
 }
 
-/* ---------------------------------------------------------
-   Verbruiken / lijnen opbouwen
-   --------------------------------------------------------- */
-
-function buildConsumptionDocumentObjectFromGroup(runId, verbruikId, group) {
-  return {
-    VerbruikID: verbruikId,
-    TechniekerCode: safeText(group.techniekerCode),
-    TechniekerNaam: safeText(group.techniekerNaam),
-    DocumentDatum: safeText(group.documentDatum),
-    WerfRef: safeText(group.werfRef),
-    Status: CONSUMPTION_STATUS.OPEN,
-    Reden: 'Import',
-    Opmerking: `Automatisch opgebouwd uit import run ${safeText(runId)}`,
-    GeboektDoor: '',
-    GeboektOp: '',
-    BronType: 'Import',
-    BronRunID: safeText(runId)
-  };
-}
-
-function buildConsumptionLineObjectsFromGroup(runId, verbruikId, group) {
-  const aggregatedLines = aggregateGroupLines(group);
-
-  return aggregatedLines.map(line => ({
-    VerbruikID: verbruikId,
-    ArtikelCode: safeText(line.artikelCode),
-    ArtikelOmschrijving: safeText(line.artikelOmschrijving),
-    Eenheid: safeText(line.eenheid),
-    Aantal: safeNumber(line.aantal, 0),
-    Actief: 'Ja',
-    BronRunID: safeText(runId),
-    BronHash: line.bronHashes.join(', '),
-    BronRijNr: line.bronRijNrs.join(', ')
-  }));
-}
-
-function replaceImportedConsumptionsForRun(runId, documentObjects, lineObjects) {
-  const runPrefix = `VIMP-${safeText(runId)}-`;
-
-  /* Verbruiken */
-  const consumptionSheet = getSheetOrThrow(TABS.CONSUMPTIONS);
-  const consumptionValues = consumptionSheet.getDataRange().getValues();
-  const consumptionHeaders = consumptionValues.length
-    ? consumptionValues[0].map(h => safeText(h))
-    : getHeaders(TABS.CONSUMPTIONS);
-  const cc = getColMap(consumptionHeaders);
-  const existingConsumptionRows = consumptionValues.length > 1 ? consumptionValues.slice(1) : [];
-
-  const keptConsumptionRows = existingConsumptionRows.filter(row => {
-    const verbruikId = safeText(row[cc['VerbruikID']]);
-    return !verbruikId.startsWith(runPrefix);
-  });
-
-  const newConsumptionRows = (documentObjects || []).map(obj => buildRowFromHeaders(consumptionHeaders, obj));
-  writeFullTable(TABS.CONSUMPTIONS, consumptionHeaders, keptConsumptionRows.concat(newConsumptionRows));
-
-  /* VerbruikLijnen */
-  const lineSheet = getSheetOrThrow(TABS.CONSUMPTION_LINES);
-  const lineValues = lineSheet.getDataRange().getValues();
-  const lineHeaders = lineValues.length
-    ? lineValues[0].map(h => safeText(h))
-    : getHeaders(TABS.CONSUMPTION_LINES);
-  const lc = getColMap(lineHeaders);
-  const existingLineRows = lineValues.length > 1 ? lineValues.slice(1) : [];
-
-  const keptLineRows = existingLineRows.filter(row => {
-    const verbruikId = safeText(row[lc['VerbruikID']]);
-    return !verbruikId.startsWith(runPrefix);
-  });
-
-  const newLineRows = (lineObjects || []).map(obj => buildRowFromHeaders(lineHeaders, obj));
-  writeFullTable(TABS.CONSUMPTION_LINES, lineHeaders, keptLineRows.concat(newLineRows));
+function summarizeConsumptionProcessLines_(lines) {
+  var rows = Array.isArray(lines) ? lines : [];
 
   return {
-    success: true,
-    documents: newConsumptionRows.length,
-    lines: newLineRows.length
+    lineCount: rows.length,
+    totaalAantal: rows.reduce(function (sum, row) {
+      return sum + safeNumber(row.aantal, 0);
+    }, 0),
+    warningCount: rows.filter(function (row) {
+      return safeText(row.validationStatus) === getConsumptionValidationWarning_();
+    }).length,
+    errorCount: rows.filter(function (row) {
+      return safeText(row.validationStatus) === getConsumptionValidationError_();
+    }).length,
+    bookingGroupCount: Object.keys(
+      rows.reduce(function (acc, row) {
+        acc[safeText(row.bookingGroupKey)] = true;
+        return acc;
+      }, {})
+    ).length,
   };
 }
 
 /* ---------------------------------------------------------
-   Main processing
+   Process batch creation
    --------------------------------------------------------- */
 
-function processConsumptionImportRun(runId) {
-  const id = safeText(runId);
-  if (!id) throw new Error('RunID ontbreekt.');
+function createConsumptionProcessBatch(payload) {
+  payload = payload || {};
 
-  assertConsumptionImportRawProcessingColumns();
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertConsumptionProcessingAccess_(sessionId);
+  var importBatch = resolveConsumptionImportBatchWithLines_(payload.importBatchId);
 
-  const rawRows = getPendingConsumptionImportRows(id);
-  if (!rawRows.length) {
-    return {
-      success: true,
-      runId: id,
-      processedRows: 0,
-      validRows: 0,
-      errorRows: 0,
-      documentsCreated: 0,
-      linesCreated: 0,
-      message: 'Geen nieuwe raw lijnen om te verwerken.'
-    };
+  var importLines = Array.isArray(importBatch.lines) ? importBatch.lines : [];
+  if (!importLines.length) {
+    throw new Error('Importbatch bevat geen lijnen.');
   }
 
-  const technicianMap = buildConsumptionTechnicianMap();
-  const articleMap = buildConsumptionArticleMap();
+  var projectedLines = buildConsumptionProjectionLines_(importLines);
+  var summary = summarizeConsumptionProcessLines_(projectedLines);
 
-  const rawUpdateResults = [];
-  const validatedRows = [];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var processBatchId = makeConsumptionProcessBatchId_();
 
-  rawRows.forEach(rawRow => {
-    const validation = validateConsumptionRawBusinessRow(rawRow, technicianMap, articleMap);
+  var batchObj = {
+    ProcessBatchID: processBatchId,
+    ImportBatchID: safeText(importBatch.importBatchId),
+    SourceType: 'Import',
+    DocumentDatum: safeText(importBatch.documentDatum),
+    DocumentDatumIso: safeText(importBatch.documentDatumIso),
+    Status: summary.errorCount ? getConsumptionProcessStatusOpen_() : getConsumptionProcessStatusReady_(),
+    Actor: safeText(payload.actor || actor.naam || actor.email),
+    Opmerking: safeText(payload.opmerking || payload.remark),
+    RawLineCount: safeNumber(importBatch.rawLineCount, importLines.length),
+    ProcessedLineCount: projectedLines.length,
+    WarningCount: summary.warningCount,
+    ErrorCount: summary.errorCount,
+    AangemaaktOp: toDisplayDateTime(nowRaw),
+    AangemaaktOpRaw: nowRaw,
+    GeboektOp: '',
+  };
 
-    if (!validation.isValid) {
-      rawUpdateResults.push({
-        _sheetRowIndex: rawRow._sheetRowIndex,
-        validatieStatus: IMPORT_VALIDATION_STATUS.ERROR,
-        validatieFout: validation.errors.join(' | '),
-        verbruikId: '',
-        verwerktOp: nowStamp()
-      });
-      return;
-    }
+  appendObjects(getConsumptionProcessBatchTab_(), [batchObj]);
 
-    const enriched = {
-      ...rawRow,
-      _matchedTechnician: validation.technician,
-      _matchedArticle: validation.article
+  var lineObjects = projectedLines.map(function (line) {
+    return {
+      ProcessLineID: makeConsumptionProcessLineId_(),
+      ProcessBatchID: processBatchId,
+      ImportBatchID: safeText(importBatch.importBatchId),
+      TechniekerCode: line.techniekerCode,
+      TechniekerNaam: line.techniekerNaam,
+      WerkorderNr: line.werkorderNr,
+      DocumentDatum: line.documentDatum,
+      DocumentDatumIso: line.documentDatumIso,
+      ArtikelCode: line.artikelCode,
+      ArtikelOmschrijving: line.artikelOmschrijving,
+      TypeMateriaal: line.typeMateriaal,
+      Eenheid: line.eenheid,
+      Aantal: line.aantal,
+      SystemBusAantal: line.systemBusAantal,
+      ProjectedBusAantal: line.projectedBusAantal,
+      ValidationStatus: line.validationStatus,
+      ValidationMessage: line.validationMessage,
+      BookingGroupKey: line.bookingGroupKey,
+      Opmerking: line.opmerking,
     };
-
-    validatedRows.push(enriched);
   });
 
-  const groups = groupValidatedConsumptionRows(validatedRows);
+  if (lineObjects.length) {
+    appendObjects(getConsumptionProcessLineTab_(), lineObjects);
+  }
 
-  const documentObjects = [];
-  const lineObjects = [];
-
-  groups.forEach((group, idx) => {
-    const verbruikId = makeImportedConsumptionId(id, idx + 1);
-
-    documentObjects.push(buildConsumptionDocumentObjectFromGroup(id, verbruikId, group));
-    lineObjects.push(...buildConsumptionLineObjectsFromGroup(id, verbruikId, group));
-
-    (group.rows || []).forEach(rawRow => {
-      rawUpdateResults.push({
-        _sheetRowIndex: rawRow._sheetRowIndex,
-        validatieStatus: IMPORT_VALIDATION_STATUS.VALIDATED,
-        validatieFout: '',
-        verbruikId: verbruikId,
-        verwerktOp: nowStamp()
-      });
-    });
+  writeAudit({
+    actie: 'CREATE_CONSUMPTION_PROCESS_BATCH',
+    actor: actor,
+    documentType: 'VerbruiksProcess',
+    documentId: processBatchId,
+    details: {
+      importBatchId: importBatch.importBatchId,
+      processedLineCount: projectedLines.length,
+      warningCount: summary.warningCount,
+      errorCount: summary.errorCount,
+    },
   });
 
-  replaceImportedConsumptionsForRun(id, documentObjects, lineObjects);
-  updateConsumptionRawProcessingResults(rawUpdateResults);
+  return {
+    batch: getConsumptionProcessBatchWithLines(processBatchId),
+    summary: summary,
+  };
+}
 
-  const validCount = rawUpdateResults.filter(x => safeText(x.validatieStatus) === IMPORT_VALIDATION_STATUS.VALIDATED).length;
-  const errorCount = rawUpdateResults.filter(x => safeText(x.validatieStatus) === IMPORT_VALIDATION_STATUS.ERROR).length;
+/* ---------------------------------------------------------
+   Recalculate / status update
+   --------------------------------------------------------- */
 
-  writeConsumptionImportLog(id, 'INFO', 'Verwerking afgerond', {
-    processedRows: rawRows.length,
-    validRows: validCount,
-    errorRows: errorCount,
-    documentsCreated: documentObjects.length,
-    linesCreated: lineObjects.length
+function recalculateConsumptionProcessBatch(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertConsumptionProcessingAccess_(sessionId);
+  var processBatchId = safeText(payload.processBatchId);
+  if (!processBatchId) throw new Error('ProcessBatchId ontbreekt.');
+
+  var existing = getConsumptionProcessBatchById(processBatchId);
+  if (!existing) throw new Error('Processbatch niet gevonden.');
+
+  return createConsumptionProcessBatch({
+    sessionId: sessionId,
+    importBatchId: existing.importBatchId,
+    actor: safeText(actor.naam || actor.email),
+    opmerking: safeText(payload.opmerking || payload.remark || existing.opmerking),
   });
+}
 
-  writeAudit(
-    'Verbruiksimport verwerkt',
-    'Systeem',
-    'Automatisch',
-    'VerbruikImportRun',
-    id,
-    {
-      processedRows: rawRows.length,
-      validRows: validCount,
-      errorRows: errorCount,
-      documentsCreated: documentObjects.length,
-      linesCreated: lineObjects.length
+function markConsumptionProcessBatchBooked(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertConsumptionProcessingAccess_(sessionId);
+  var processBatchId = safeText(payload.processBatchId);
+  if (!processBatchId) throw new Error('ProcessBatchId ontbreekt.');
+
+  var batch = getConsumptionProcessBatchById(processBatchId);
+  if (!batch) throw new Error('Processbatch niet gevonden.');
+
+  var table = getAllValues(getConsumptionProcessBatchTab_());
+  if (!table.length) throw new Error('Processbatchtab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var rows = readObjectsSafe(getConsumptionProcessBatchTab_()).map(function (row) {
+    var current = mapConsumptionProcessBatch(row);
+    if (safeText(current.processBatchId) !== processBatchId) {
+      return row;
     }
+
+    row.Status = getConsumptionProcessStatusBooked_();
+    row.GeboektOp = toDisplayDateTime(nowRaw);
+    return row;
+  });
+
+  writeFullTable(
+    getConsumptionProcessBatchTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
+  );
+
+  writeAudit({
+    actie: 'MARK_CONSUMPTION_PROCESS_BATCH_BOOKED',
+    actor: actor,
+    documentType: 'VerbruiksProcess',
+    documentId: processBatchId,
+    details: {},
+  });
+
+  return getConsumptionProcessBatchWithLines(processBatchId);
+}
+
+/* ---------------------------------------------------------
+   Booking preparation queries
+   --------------------------------------------------------- */
+
+function buildConsumptionBookingGroups(processLines) {
+  var grouped = {};
+
+  (processLines || []).forEach(function (line) {
+    var key = safeText(line.bookingGroupKey);
+    if (!key) return;
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        bookingGroupKey: key,
+        techniekerCode: safeText(line.techniekerCode),
+        techniekerNaam: safeText(line.techniekerNaam),
+        werkorderNr: safeText(line.werkorderNr),
+        documentDatum: safeText(line.documentDatum),
+        documentDatumIso: safeText(line.documentDatumIso),
+        lines: [],
+      };
+    }
+
+    grouped[key].lines.push(line);
+  });
+
+  return Object.keys(grouped)
+    .map(function (key) {
+      var group = grouped[key];
+      var statuses = group.lines.map(function (line) {
+        return safeText(line.validationStatus);
+      });
+
+      return Object.assign({}, group, {
+        validationStatus:
+          statuses.indexOf(getConsumptionValidationError_()) >= 0
+            ? getConsumptionValidationError_()
+            : statuses.indexOf(getConsumptionValidationWarning_()) >= 0
+              ? getConsumptionValidationWarning_()
+              : getConsumptionValidationOk_(),
+        totaalAantal: group.lines.reduce(function (sum, line) {
+          return sum + safeNumber(line.aantal, 0);
+        }, 0),
+      });
+    })
+    .sort(function (a, b) {
+      return (
+        safeText(a.techniekerCode).localeCompare(safeText(b.techniekerCode)) ||
+        safeText(a.documentDatumIso).localeCompare(safeText(b.documentDatumIso)) ||
+        safeText(a.werkorderNr).localeCompare(safeText(b.werkorderNr))
+      );
+    });
+}
+
+function getConsumptionProcessBookingData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  assertConsumptionProcessingAccess_(sessionId);
+
+  var processBatchId = safeText(payload.processBatchId);
+  if (!processBatchId) throw new Error('ProcessBatchId ontbreekt.');
+
+  var batch = getConsumptionProcessBatchWithLines(processBatchId);
+  if (!batch) throw new Error('Processbatch niet gevonden.');
+
+  var groups = buildConsumptionBookingGroups(batch.lines || []);
+
+  return {
+    batch: batch,
+    bookingGroups: groups,
+    summary: summarizeConsumptionProcessLines_(batch.lines || []),
+  };
+}
+
+/* ---------------------------------------------------------
+   Queries
+   --------------------------------------------------------- */
+
+function getConsumptionProcessData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertConsumptionProcessingAccess_(sessionId);
+  var rows = buildConsumptionProcessBatchesWithLines(
+    getAllConsumptionProcessBatches(),
+    getAllConsumptionProcessLines()
   );
 
   return {
-    success: true,
-    runId: id,
-    processedRows: rawRows.length,
-    validRows: validCount,
-    errorRows: errorCount,
-    documentsCreated: documentObjects.length,
-    linesCreated: lineObjects.length,
-    message: 'Verbruiksimport verwerkt.'
+    items: rows,
+    batches: rows,
+    summary: {
+      totaal: rows.length,
+      open: rows.filter(function (x) { return safeText(x.status) === getConsumptionProcessStatusOpen_(); }).length,
+      klaar: rows.filter(function (x) { return safeText(x.status) === getConsumptionProcessStatusReady_(); }).length,
+      geboekt: rows.filter(function (x) { return safeText(x.status) === getConsumptionProcessStatusBooked_(); }).length,
+      gesloten: rows.filter(function (x) { return safeText(x.status) === getConsumptionProcessStatusClosed_(); }).length,
+      actorRol: safeText(actor.rol),
+    }
   };
-}
-
-function processLatestConsumptionImportRun() {
-  const latestRunId = getLatestConsumptionImportRunId();
-  if (!latestRunId) {
-    return {
-      success: true,
-      processedRows: 0,
-      message: 'Geen import run gevonden.'
-    };
-  }
-
-  return processConsumptionImportRun(latestRunId);
-}
-
-function testProcessLatestConsumptionImportRun() {
-  return processLatestConsumptionImportRun();
 }

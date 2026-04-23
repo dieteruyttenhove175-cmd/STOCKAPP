@@ -1,0 +1,38 @@
+<!-- _mobilewarehouse_header.html
+     Mobile warehouse header partial
+-->
+<div class="card">
+  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+    <div>
+      <div class="badge" style="margin-bottom: 8px;">
+        <?= model.pageRole || 'mobilewarehouse' ?>
+      </div>
+
+      <h1 style="margin: 0 0 6px 0; font-size: 28px;">
+        <?= model.pageTitle || 'Mobiel magazijn dashboard' ?>
+      </h1>
+
+      <div class="muted" style="max-width: 900px;">
+        <?= model.pageSubtitle || 'Overzicht voor mobiel magazijn.' ?>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="badge">
+        Gebruiker: <?= model.currentUserName || '-' ?>
+      </div>
+
+      <div class="badge">
+        Rol: <?= model.currentUserRole || '-' ?>
+      </div>
+
+      <button
+        type="button"
+        class="secondary"
+        onclick="loadMobileWarehouseData({ showBusyOverlay: true })"
+      >
+        Vernieuwen
+      </button>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,67 @@
+<!-- _mobilewarehouse_stock.html
+     Mobile warehouse stock partial
+-->
+<div class="card">
+  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+    <div>
+      <h3 class="section-title" style="margin-bottom: 4px;">Stock</h3>
+      <div class="muted">
+        Overzicht van de actuele voorraad in het mobiel magazijn.
+      </div>
+    </div>
+
+    <div class="row">
+      <button type="button" class="secondary" onclick="loadMobileWarehouseData({ showBusyOverlay: true })">
+        Vernieuwen
+      </button>
+      <button type="button" class="secondary" onclick="switchMobileTab('transfers')">
+        Naar transfers
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="grid three">
+    <div>
+      <label for="mobileStockSearch">Zoeken</label>
+      <input
+        id="mobileStockSearch"
+        type="text"
+        placeholder="Artikelcode of omschrijving"
+        oninput="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      />
+    </div>
+
+    <div>
+      <label for="mobileStockTypeFilter">Type materiaal</label>
+      <select
+        id="mobileStockTypeFilter"
+        onchange="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      >
+        <option value="">Alle types</option>
+        <option value="Grabbel">Grabbel</option>
+        <option value="Behoefte">Behoefte</option>
+        <option value="Onbekend">Onbekend</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="mobileStockOnlyPositive">Filter</label>
+      <select
+        id="mobileStockOnlyPositive"
+        onchange="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      >
+        <option value="">Alle lijnen</option>
+        <option value="positive">Enkel voorraad &gt; 0</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="muted" style="margin-top: 12px;">
+    Deze filters zijn voorbereid in de UI-shell. De renderlogica in de mobile JS-module
+    kan hier later per functie verder op uitbreiden.
+  </div>
+</div>
+
+<div id="mobileStockTable"></div>

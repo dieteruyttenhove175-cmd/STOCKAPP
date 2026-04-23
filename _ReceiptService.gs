@@ -1,454 +1,667 @@
 /* =========================================================
-   40_ReceiptService.gs — ontvangsten
+   40_ReceiptService.gs
+   Refactor: receipt core service
+   Doel:
+   - centrale documentlaag voor ontvangsten
+   - manuele ontvangst aanmaken
+   - lijnen bewaren
+   - indienen
+   - goedkeuren en stockmutaties boeken
    ========================================================= */
 
-function makeReceiptId() {
-  return makeStampedId('R');
+/* ---------------------------------------------------------
+   Tabs / fallbacks
+   --------------------------------------------------------- */
+
+function getReceiptHeaderTab_() {
+  return TABS.RECEIPTS || 'Ontvangsten';
 }
 
-function getAllReceipts() {
-  return readObjectsSafe(TABS.RECEIPTS)
-    .map(mapReceipt)
-    .sort((a, b) =>
-      `${safeText(b.documentDatumIso)} ${safeText(b.ontvangstId)}`.localeCompare(
-        `${safeText(a.documentDatumIso)} ${safeText(a.ontvangstId)}`
-      )
-    );
+function getReceiptLineTab_() {
+  return TABS.RECEIPT_LINES || 'OntvangstLijnen';
+}
+
+function getReceiptDefaultSupplier_() {
+  return 'Fluvius';
+}
+
+function getReceiptStatusOpen_() {
+  if (typeof RECEIPT_STATUS !== 'undefined' && RECEIPT_STATUS && RECEIPT_STATUS.OPEN) {
+    return RECEIPT_STATUS.OPEN;
+  }
+  return 'Open';
+}
+
+function getReceiptStatusSubmitted_() {
+  if (typeof RECEIPT_STATUS !== 'undefined' && RECEIPT_STATUS && RECEIPT_STATUS.SUBMITTED) {
+    return RECEIPT_STATUS.SUBMITTED;
+  }
+  return 'Ingediend';
+}
+
+function getReceiptStatusApproved_() {
+  if (typeof RECEIPT_STATUS !== 'undefined' && RECEIPT_STATUS && RECEIPT_STATUS.APPROVED) {
+    return RECEIPT_STATUS.APPROVED;
+  }
+  return 'Goedgekeurd';
+}
+
+function getReceiptStatusClosed_() {
+  if (typeof RECEIPT_STATUS !== 'undefined' && RECEIPT_STATUS && RECEIPT_STATUS.CLOSED) {
+    return RECEIPT_STATUS.CLOSED;
+  }
+  return 'Gesloten';
+}
+
+function isReceiptEditable_(status) {
+  var value = safeText(status);
+  return !value || value === getReceiptStatusOpen_();
+}
+
+function makeReceiptId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'RCT-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+function makeReceiptLineId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'RCL-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+/* ---------------------------------------------------------
+   Mapping
+   --------------------------------------------------------- */
+
+function mapReceiptHeader(row) {
+  return {
+    receiptId: safeText(row.ReceiptID || row.ReceiptId || row.OntvangstID || row.ID),
+    leverancier: safeText(row.Leverancier || row.Supplier || getReceiptDefaultSupplier_()),
+    typeMateriaal: safeText(row.TypeMateriaal || row.MaterialType),
+    bestelbonNr: safeText(row.BestelbonNr || row.Bestelbon || row.PONumber),
+    externeReferentie: safeText(row.ExterneReferentie || row.Reference || row.FluviusReferentie),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    ontvangstDatum: safeText(row.OntvangstDatum || row.ReceiveDate),
+    ontvangstDatumIso: safeText(row.OntvangstDatumIso || row.ReceiveDateIso || row.OntvangstDatum || row.ReceiveDate),
+    bronType: safeText(row.BronType || 'Manueel'),
+    bronReferentie: safeText(row.BronReferentie || row.SourceReference),
+    status: safeText(row.Status),
+    actor: safeText(row.Actor),
+    aangemaaktOp: safeText(row.AangemaaktOp),
+    aangemaaktOpRaw: safeText(row.AangemaaktOpRaw || row.AangemaaktOp),
+    ingediendOp: safeText(row.IngediendOp),
+    goedgekeurdOp: safeText(row.GoedgekeurdOp),
+    opmerking: safeText(row.Opmerking),
+    deltaLijnen: safeNumber(row.DeltaLijnen, 0),
+  };
+}
+
+function mapReceiptLine(row) {
+  var besteld = safeNumber(row.BesteldAantal || row.Besteld || row.ExpectedQty, 0);
+  var ontvangen = safeNumber(row.OntvangenAantal || row.Ontvangen || row.ReceivedQty, 0);
+
+  return {
+    receiptLineId: safeText(row.ReceiptLineID || row.ReceiptLineId || row.OntvangstLijnID || row.ID),
+    receiptId: safeText(row.ReceiptID || row.ReceiptId || row.OntvangstID),
+    artikelCode: safeText(row.ArtikelCode || row.ArtikelNr),
+    artikelOmschrijving: safeText(row.ArtikelOmschrijving || row.Artikel),
+    typeMateriaal: safeText(row.TypeMateriaal || determineMaterialTypeFromArticle(safeText(row.ArtikelCode || row.ArtikelNr))),
+    eenheid: safeText(row.Eenheid || row.Unit),
+    besteldAantal: besteld,
+    ontvangenAantal: ontvangen,
+    deltaAantal: safeNumber(row.DeltaAantal, ontvangen - besteld),
+    redenDelta: safeText(row.RedenDelta || row.DeltaReden),
+    opmerking: safeText(row.Opmerking),
+    palletNr: safeText(row.PalletNr || row.Pallet || ''),
+    label: safeText(row.Label || ''),
+  };
+}
+
+/* ---------------------------------------------------------
+   Read layer
+   --------------------------------------------------------- */
+
+function getAllReceiptHeaders() {
+  return readObjectsSafe(getReceiptHeaderTab_())
+    .map(mapReceiptHeader)
+    .sort(function (a, b) {
+      return (
+        safeText(b.documentDatumIso).localeCompare(safeText(a.documentDatumIso)) ||
+        safeText(b.receiptId).localeCompare(safeText(a.receiptId))
+      );
+    });
 }
 
 function getAllReceiptLines() {
-  return readObjectsSafe(TABS.RECEIPT_LINES)
+  return readObjectsSafe(getReceiptLineTab_())
     .map(mapReceiptLine)
-    .filter(line => line.actief);
+    .sort(function (a, b) {
+      return (
+        safeText(a.receiptId).localeCompare(safeText(b.receiptId)) ||
+        safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving))
+      );
+    });
 }
 
-function getReceiptById(ontvangstId) {
-  const id = safeText(ontvangstId);
+function getReceiptHeaderById(receiptId) {
+  var id = safeText(receiptId);
   if (!id) return null;
 
-  return getAllReceipts().find(item => item.ontvangstId === id) || null;
+  return getAllReceiptHeaders().find(function (item) {
+    return safeText(item.receiptId) === id;
+  }) || null;
 }
 
-function getReceiptLinesByReceiptId(ontvangstId) {
-  const id = safeText(ontvangstId);
-  if (!id) return [];
-
-  return getAllReceiptLines().filter(line => line.ontvangstId === id);
+function getReceiptLinesByReceiptId(receiptId) {
+  var id = safeText(receiptId);
+  return getAllReceiptLines().filter(function (item) {
+    return safeText(item.receiptId) === id;
+  });
 }
 
-function buildReceiptLineObject(ontvangstId, line) {
-  const artikelCode = safeText(line.artikelCode);
-  const article = getArticleMaster(artikelCode);
+function buildReceiptsWithLines(headers, lines) {
+  var lineMap = {};
 
-  const besteldAantal = safeNumber(line.besteldAantal, 0);
-  const ontvangenAantal = safeNumber(line.ontvangenAantal, 0);
-  const deltaAantal = besteldAantal - ontvangenAantal;
-
-  return {
-    OntvangstID: safeText(ontvangstId),
-    ArtikelCode: artikelCode,
-    ArtikelOmschrijving: safeText(line.artikelOmschrijving) || safeText(article && article.artikelOmschrijving),
-    Eenheid: safeText(line.eenheid) || safeText(article && article.eenheid),
-    BesteldAantal: besteldAantal,
-    OntvangenAantal: ontvangenAantal,
-    DeltaAantal: deltaAantal,
-    RedenDelta: safeText(line.redenDelta),
-    Opmerking: safeText(line.opmerking),
-    Actief: 'Ja'
-  };
-}
-
-function replaceReceiptLinesForReceipt(ontvangstId, lineObjects) {
-  const receiptId = safeText(ontvangstId);
-  const sheet = getSheetOrThrow(TABS.RECEIPT_LINES);
-  const values = sheet.getDataRange().getValues();
-  const headers = values.length ? values[0].map(h => safeText(h)) : getHeaders(TABS.RECEIPT_LINES);
-  const col = getColMap(headers);
-  const existingRows = values.length > 1 ? values.slice(1) : [];
-
-  const keptRows = existingRows.filter(row => safeText(row[col['OntvangstID']]) !== receiptId);
-  const newRows = (lineObjects || []).map(obj => buildRowFromHeaders(headers, obj));
-
-  writeFullTable(TABS.RECEIPT_LINES, headers, keptRows.concat(newRows));
-
-  return {
-    success: true,
-    lines: newRows.length
-  };
-}
-
-function updateReceiptHeader(ontvangstId, updates) {
-  const receiptId = safeText(ontvangstId);
-  const sheet = getSheetOrThrow(TABS.RECEIPTS);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) throw new Error('Tab Ontvangsten is leeg.');
-
-  const headers = values[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  let updated = false;
-
-  for (let i = 1; i < values.length; i++) {
-    if (safeText(values[i][col['OntvangstID']]) !== receiptId) continue;
-
-    Object.keys(updates || {}).forEach(field => {
-      if (col[field] !== undefined) {
-        values[i][col[field]] = updates[field];
-      }
-    });
-
-    updated = true;
-    break;
-  }
-
-  if (!updated) {
-    throw new Error('Ontvangst niet gevonden.');
-  }
-
-  if (values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
-  }
-
-  return { success: true };
-}
-
-function buildReceiptsWithLines(receipts, lines) {
-  const linesByReceipt = {};
-
-  (lines || []).forEach(line => {
-    const id = safeText(line.ontvangstId);
-    if (!id) return;
-
-    if (!linesByReceipt[id]) linesByReceipt[id] = [];
-    linesByReceipt[id].push(line);
+  (lines || []).forEach(function (line) {
+    var id = safeText(line.receiptId);
+    if (!lineMap[id]) lineMap[id] = [];
+    lineMap[id].push(line);
   });
 
-  return (receipts || []).map(receipt => {
-    const receiptLines = linesByReceipt[receipt.ontvangstId] || [];
-    return {
-      ...receipt,
+  return (headers || []).map(function (header) {
+    var receiptLines = lineMap[safeText(header.receiptId)] || [];
+    var deltaLijnen = receiptLines.filter(function (line) {
+      return safeNumber(line.deltaAantal, 0) !== 0;
+    }).length;
+
+    return Object.assign({}, header, {
       lines: receiptLines,
       lineCount: receiptLines.length,
-      deltaCount: receiptLines.filter(line => safeNumber(line.deltaAantal, 0) !== 0).length
+      totaalOntvangen: receiptLines.reduce(function (sum, line) {
+        return sum + safeNumber(line.ontvangenAantal, 0);
+      }, 0),
+      deltaLijnen: deltaLijnen,
+    });
+  });
+}
+
+function getReceiptsWithLines() {
+  return buildReceiptsWithLines(getAllReceiptHeaders(), getAllReceiptLines());
+}
+
+function getReceiptWithLines(receiptId) {
+  var header = getReceiptHeaderById(receiptId);
+  if (!header) return null;
+  return buildReceiptsWithLines([header], getReceiptLinesByReceiptId(receiptId))[0] || null;
+}
+
+/* ---------------------------------------------------------
+   Payload normalization
+   --------------------------------------------------------- */
+
+function normalizeReceiptHeaderPayload_(payload) {
+  payload = payload || {};
+
+  return {
+    sessionId: getPayloadSessionId(payload),
+    leverancier: safeText(payload.leverancier || payload.supplier || getReceiptDefaultSupplier_()),
+    typeMateriaal: safeText(payload.typeMateriaal || payload.materialType),
+    bestelbonNr: safeText(payload.bestelbonNr || payload.purchaseOrderNumber || payload.poNumber),
+    externeReferentie: safeText(payload.externeReferentie || payload.reference || payload.fluviusReferentie),
+    documentDatum: safeText(payload.documentDatum || payload.documentDate),
+    ontvangstDatum: safeText(payload.ontvangstDatum || payload.receiveDate || payload.documentDatum || payload.documentDate),
+    bronType: safeText(payload.bronType || payload.sourceType || 'Manueel'),
+    bronReferentie: safeText(payload.bronReferentie || payload.sourceReference),
+    opmerking: safeText(payload.opmerking || payload.remark),
+    actor: safeText(payload.actor),
+  };
+}
+
+function normalizeReceiptLines_(lines) {
+  return (Array.isArray(lines) ? lines : []).map(function (line) {
+    var artikelCode = safeText(line.artikelCode || line.artikelNr);
+    var artikelOmschrijving = safeText(line.artikelOmschrijving || line.artikel);
+    var eenheid = safeText(line.eenheid || line.unit || '');
+    var besteldAantal = safeNumber(line.besteldAantal || line.besteld || line.expectedQty, 0);
+    var ontvangenAantal = safeNumber(line.ontvangenAantal || line.ontvangen || line.receivedQty, 0);
+    var typeMateriaal = safeText(line.typeMateriaal || determineMaterialTypeFromArticle(artikelCode));
+    var deltaAantal = ontvangenAantal - besteldAantal;
+
+    return {
+      artikelCode: artikelCode,
+      artikelOmschrijving: artikelOmschrijving,
+      typeMateriaal: typeMateriaal,
+      eenheid: eenheid,
+      besteldAantal: besteldAantal,
+      ontvangenAantal: ontvangenAantal,
+      deltaAantal: safeNumber(line.deltaAantal, deltaAantal),
+      redenDelta: safeText(line.redenDelta || line.deltaReason),
+      opmerking: safeText(line.opmerking),
+      palletNr: safeText(line.palletNr || line.pallet),
+      label: safeText(line.label),
     };
   });
 }
 
-function getReceiptsData(sessionId) {
-  assertWarehouseAccess(sessionId);
+/* ---------------------------------------------------------
+   Validation
+   --------------------------------------------------------- */
 
-  const receipts = getAllReceipts();
-  const lines = getAllReceiptLines();
-
-  return {
-    receipts: buildReceiptsWithLines(receipts, lines),
-    centralWarehouse: getCentralWarehouseOverview()
-  };
+function validateReceiptHeader_(payload) {
+  if (!payload.sessionId) throw new Error('Sessie ontbreekt.');
+  if (!payload.documentDatum) throw new Error('Documentdatum is verplicht.');
+  if (!payload.ontvangstDatum) throw new Error('Ontvangstdatum is verplicht.');
+  return true;
 }
 
-function createManualReceipt(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertWarehouseAccess(sessionId);
-
-  const bestelbonNr = safeText(payload.bestelbonNr);
-  const externeReferentie = safeText(payload.externeReferentie);
-  const bronType = safeText(payload.bronType || 'Manueel');
-  const documentDatum = safeText(payload.documentDatum);
-  const ontvangstdatum = safeText(payload.ontvangstdatum);
-
-  if (!documentDatum) throw new Error('Documentdatum is verplicht.');
-  if (!ontvangstdatum) throw new Error('Ontvangstdatum is verplicht.');
-
-  const ontvangstId = makeReceiptId();
-
-  appendObjects(TABS.RECEIPTS, [{
-    OntvangstID: ontvangstId,
-    TypeMateriaal: '',
-    Leverancier: 'Fluvius',
-    BestelbonNr: bestelbonNr,
-    ExterneReferentie: externeReferentie,
-    BronType: bronType,
-    BronBestand: '',
-    DocumentDatum: documentDatum,
-    Ontvangstdatum: ontvangstdatum,
-    Status: RECEIPT_STATUS.IN_PROGRESS,
-    IngediendDoor: '',
-    IngediendOp: '',
-    GoedgekeurdDoor: '',
-    GoedgekeurdOp: '',
-    ManagerOpmerking: ''
-  }]);
-
-  writeAudit(
-    'Ontvangst aangemaakt',
-    user.rol,
-    user.naam || user.email || 'Magazijn',
-    'Ontvangst',
-    ontvangstId,
-    {
-      bestelbonNr: bestelbonNr,
-      documentDatum: documentDatum,
-      ontvangstdatum: ontvangstdatum,
-      bronType: bronType
-    }
-  );
-
-  return {
-    success: true,
-    ontvangstId,
-    message: 'Ontvangst aangemaakt.'
-  };
-}
-
-function validateReceiptLines(cleanedLines) {
-  if (!(cleanedLines || []).length) {
-    throw new Error('Geen geldige ontvangstlijnen om te bewaren.');
+function validateReceiptLines_(lines) {
+  if (!lines.length) {
+    throw new Error('Geen ontvangstlijnen ontvangen.');
   }
 
-  cleanedLines.forEach(line => {
-    const artikelCode = safeText(line.artikelCode);
-    const artikelOmschrijving = safeText(line.artikelOmschrijving);
+  lines.forEach(function (line, index) {
+    var rowNr = index + 1;
 
-    if (!artikelCode || !artikelOmschrijving) {
-      throw new Error('Artikelcode en omschrijving zijn verplicht op elke lijn.');
+    if (!safeText(line.artikelCode)) {
+      throw new Error('Artikelcode ontbreekt op lijn ' + rowNr + '.');
     }
-
-    const besteldAantal = safeNumber(line.besteldAantal, 0);
-    const ontvangenAantal = safeNumber(line.ontvangenAantal, 0);
-    const deltaAantal = besteldAantal - ontvangenAantal;
-    const redenDelta = safeText(line.redenDelta);
-    const opmerking = safeText(line.opmerking);
-
-    if (besteldAantal < 0 || ontvangenAantal < 0) {
-      throw new Error('Besteld en ontvangen aantal mogen niet negatief zijn.');
+    if (safeNumber(line.ontvangenAantal, 0) < 0) {
+      throw new Error('Ontvangen aantal mag niet negatief zijn op lijn ' + rowNr + '.');
     }
-
-    if (deltaAantal !== 0) {
-      if (!RECEIPT_DELTA_REASONS.includes(redenDelta)) {
-        throw new Error('Ongeldige reden delta voor artikel ' + artikelCode);
-      }
-
-      if (!redenDelta) {
-        throw new Error('Reden delta is verplicht voor artikel ' + artikelCode);
-      }
-
-      if (redenDelta === 'Andere reden' && !opmerking) {
-        throw new Error('Opmerking is verplicht bij Andere reden voor artikel ' + artikelCode);
-      }
+    if (safeNumber(line.deltaAantal, 0) !== 0 && !safeText(line.redenDelta)) {
+      throw new Error('Reden delta is verplicht op lijn ' + rowNr + '.');
     }
   });
+
+  return true;
+}
+
+function deriveReceiptMaterialType_(lines) {
+  var types = {};
+  (lines || []).forEach(function (line) {
+    var t = safeText(line.typeMateriaal);
+    if (t) {
+      types[t] = true;
+    }
+  });
+
+  var keys = Object.keys(types);
+  if (!keys.length) return '';
+  if (keys.length === 1) return keys[0];
+  return 'Gemengd';
+}
+
+/* ---------------------------------------------------------
+   Header create / lines save
+   --------------------------------------------------------- */
+
+function createManualReceipt(payload) {
+  var normalized = normalizeReceiptHeaderPayload_(payload);
+  var actor = assertWarehouseAccess(normalized.sessionId);
+
+  validateReceiptHeader_(normalized);
+
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var receiptId = makeReceiptId_();
+
+  var obj = {
+    ReceiptID: receiptId,
+    Leverancier: normalized.leverancier || getReceiptDefaultSupplier_(),
+    TypeMateriaal: normalized.typeMateriaal,
+    BestelbonNr: normalized.bestelbonNr,
+    ExterneReferentie: normalized.externeReferentie,
+    DocumentDatum: normalized.documentDatum,
+    DocumentDatumIso: normalized.documentDatum,
+    OntvangstDatum: normalized.ontvangstDatum,
+    OntvangstDatumIso: normalized.ontvangstDatum,
+    BronType: normalized.bronType || 'Manueel',
+    BronReferentie: normalized.bronReferentie,
+    Status: getReceiptStatusOpen_(),
+    Actor: normalized.actor || safeText(actor.naam || actor.email),
+    AangemaaktOp: toDisplayDateTime(nowRaw),
+    AangemaaktOpRaw: nowRaw,
+    IngediendOp: '',
+    GoedgekeurdOp: '',
+    Opmerking: normalized.opmerking,
+    DeltaLijnen: 0,
+  };
+
+  appendObjects(getReceiptHeaderTab_(), [obj]);
+
+  writeAudit({
+    actie: 'CREATE_RECEIPT',
+    actor: actor,
+    documentType: 'Ontvangst',
+    documentId: receiptId,
+    details: {
+      leverancier: obj.Leverancier,
+      documentDatum: obj.DocumentDatum,
+      bronType: obj.BronType,
+    },
+  });
+
+  return mapReceiptHeader(obj);
 }
 
 function saveReceiptLines(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertWarehouseAccess(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+  var receiptId = safeText(payload.receiptId);
+  if (!receiptId) throw new Error('ReceiptId ontbreekt.');
 
-  const ontvangstId = safeText(payload.ontvangstId);
-  const lines = Array.isArray(payload.lines) ? payload.lines : [];
-
-  if (!ontvangstId) throw new Error('OntvangstID ontbreekt.');
-  if (!lines.length) throw new Error('Geen ontvangstlijnen ontvangen.');
-
-  const receipt = getReceiptById(ontvangstId);
-  if (!receipt) throw new Error('Ontvangst niet gevonden.');
-
-  if ([RECEIPT_STATUS.SUBMITTED, RECEIPT_STATUS.APPROVED].includes(receipt.status)) {
-    throw new Error('Deze ontvangst kan niet meer aangepast worden.');
+  var header = getReceiptHeaderById(receiptId);
+  if (!header) throw new Error('Ontvangst niet gevonden.');
+  if (!isReceiptEditable_(header.status)) {
+    throw new Error('Ontvangst is niet meer bewerkbaar.');
   }
 
-  const cleaned = lines
-    .map(line => buildReceiptLineObject(ontvangstId, {
-      artikelCode: line.artikelCode,
-      artikelOmschrijving: line.artikelOmschrijving,
-      eenheid: line.eenheid,
-      besteldAantal: line.besteldAantal,
-      ontvangenAantal: line.ontvangenAantal,
-      redenDelta: line.redenDelta,
-      opmerking: line.opmerking
-    }))
-    .filter(line => safeText(line.ArtikelCode) && safeText(line.ArtikelOmschrijving));
+  var lines = normalizeReceiptLines_(payload.lines);
+  validateReceiptLines_(lines);
 
-  const cleanedForValidation = cleaned.map(line => ({
-    artikelCode: line.ArtikelCode,
-    artikelOmschrijving: line.ArtikelOmschrijving,
-    eenheid: line.Eenheid,
-    besteldAantal: line.BesteldAantal,
-    ontvangenAantal: line.OntvangenAantal,
-    deltaAantal: line.DeltaAantal,
-    redenDelta: line.RedenDelta,
-    opmerking: line.Opmerking
-  }));
+  var table = getAllValues(getReceiptLineTab_());
+  var headerRow = table.length ? table[0] : null;
+  var currentRows = readObjectsSafe(getReceiptLineTab_());
 
-  validateReceiptLines(cleanedForValidation);
-
-  replaceReceiptLinesForReceipt(ontvangstId, cleaned);
-
-  const receiptType = determineReceiptMaterialType(
-    cleaned.map(line => ({ artikelCode: line.ArtikelCode }))
-  );
-
-  updateReceiptHeader(ontvangstId, {
-    TypeMateriaal: receiptType,
-    Leverancier: 'Fluvius'
+  var kept = currentRows.filter(function (row) {
+    return safeText(row.ReceiptID || row.ReceiptId || row.OntvangstID) !== receiptId;
   });
 
-  writeAudit(
-    'Ontvangstlijnen opgeslagen',
-    user.rol,
-    user.naam || user.email || 'Magazijn',
-    'Ontvangst',
-    ontvangstId,
-    {
-      lijnen: cleaned.length,
-      typeMateriaal: receiptType
-    }
-  );
+  var newRows = lines.map(function (line) {
+    return {
+      ReceiptLineID: makeReceiptLineId_(),
+      ReceiptID: receiptId,
+      ArtikelCode: line.artikelCode,
+      ArtikelOmschrijving: line.artikelOmschrijving,
+      TypeMateriaal: line.typeMateriaal,
+      Eenheid: line.eenheid,
+      BesteldAantal: line.besteldAantal,
+      OntvangenAantal: line.ontvangenAantal,
+      DeltaAantal: line.deltaAantal,
+      RedenDelta: line.redenDelta,
+      Opmerking: line.opmerking,
+      PalletNr: line.palletNr,
+      Label: line.label,
+    };
+  });
 
-  return {
-    success: true,
-    lines: cleaned.length,
-    message: 'Ontvangstlijnen opgeslagen.'
-  };
+  var finalObjects = kept.concat(newRows);
+
+  if (!headerRow && finalObjects.length) {
+    appendObjects(getReceiptLineTab_(), newRows);
+  } else if (headerRow) {
+    writeFullTable(
+      getReceiptLineTab_(),
+      headerRow,
+      finalObjects.map(function (obj) {
+        return buildRowFromHeaders(headerRow, obj);
+      })
+    );
+  } else {
+    appendObjects(getReceiptLineTab_(), newRows);
+  }
+
+  updateReceiptDerivedFields_(receiptId, {
+    typeMateriaal: deriveReceiptMaterialType_(lines),
+    deltaLijnen: lines.filter(function (line) {
+      return safeNumber(line.deltaAantal, 0) !== 0;
+    }).length,
+  });
+
+  writeAudit({
+    actie: 'SAVE_RECEIPT_LINES',
+    actor: actor,
+    documentType: 'Ontvangst',
+    documentId: receiptId,
+    details: {
+      lineCount: lines.length,
+    },
+  });
+
+  return getReceiptWithLines(receiptId);
 }
+
+function updateReceiptDerivedFields_(receiptId, values) {
+  var table = getAllValues(getReceiptHeaderTab_());
+  if (!table.length) throw new Error('Ontvangsttab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var rows = readObjectsSafe(getReceiptHeaderTab_()).map(function (row) {
+    var current = mapReceiptHeader(row);
+    if (safeText(current.receiptId) !== safeText(receiptId)) {
+      return row;
+    }
+
+    row.TypeMateriaal = safeText(values.typeMateriaal || row.TypeMateriaal);
+    row.DeltaLijnen = safeNumber(values.deltaLijnen, 0);
+    return row;
+  });
+
+  writeFullTable(
+    getReceiptHeaderTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
+  );
+}
+
+/* ---------------------------------------------------------
+   Submit / approve
+   --------------------------------------------------------- */
 
 function submitReceipt(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertWarehouseAccess(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+  var receiptId = safeText(payload.receiptId);
+  if (!receiptId) throw new Error('ReceiptId ontbreekt.');
 
-  const ontvangstId = safeText(payload.ontvangstId);
-  const actor = safeText(payload.actor || user.naam || 'Magazijn');
-
-  if (!ontvangstId) throw new Error('OntvangstID ontbreekt.');
-
-  const receipt = getReceiptById(ontvangstId);
-  if (!receipt) throw new Error('Ontvangst niet gevonden.');
-
-  const lineRows = getReceiptLinesByReceiptId(ontvangstId);
-  if (!lineRows.length) {
-    throw new Error('Deze ontvangst bevat nog geen actieve lijnen.');
+  var header = getReceiptHeaderById(receiptId);
+  if (!header) throw new Error('Ontvangst niet gevonden.');
+  if (!isReceiptEditable_(header.status)) {
+    throw new Error('Ontvangst kan niet meer ingediend worden.');
   }
 
-  updateReceiptHeader(ontvangstId, {
-    Status: RECEIPT_STATUS.SUBMITTED,
-    IngediendDoor: actor,
-    IngediendOp: nowStamp()
+  var lines = getReceiptLinesByReceiptId(receiptId);
+  validateReceiptLines_(lines);
+
+  var table = getAllValues(getReceiptHeaderTab_());
+  if (!table.length) throw new Error('Ontvangsttab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var rows = readObjectsSafe(getReceiptHeaderTab_()).map(function (row) {
+    var current = mapReceiptHeader(row);
+    if (safeText(current.receiptId) !== receiptId) {
+      return row;
+    }
+
+    row.Status = getReceiptStatusSubmitted_();
+    row.IngediendOp = toDisplayDateTime(nowRaw);
+    return row;
   });
 
-  pushManagerNotification(
-    'OntvangstGoedTeKeuren',
-    'Ontvangst ingediend',
-    `Ontvangst ${ontvangstId} is ingediend en wacht op goedkeuring.`,
-    'Ontvangst',
-    ontvangstId
+  writeFullTable(
+    getReceiptHeaderTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
   );
 
-  writeAudit(
-    'Ontvangst ingediend',
-    user.rol,
-    actor,
-    'Ontvangst',
-    ontvangstId,
-    {
-      status: RECEIPT_STATUS.SUBMITTED,
-      lijnen: lineRows.length
-    }
-  );
+  if (typeof pushManagerNotification === 'function') {
+    pushManagerNotification(
+      'Ontvangst',
+      'Ontvangst wacht op goedkeuring',
+      'Er werd een ontvangst ingediend die goedkeuring vraagt.',
+      'Ontvangst',
+      receiptId,
+      'MANAGER'
+    );
+  }
 
-  return {
-    success: true,
-    message: 'Ontvangst ingediend voor goedkeuring.'
-  };
+  writeAudit({
+    actie: 'SUBMIT_RECEIPT',
+    actor: actor,
+    documentType: 'Ontvangst',
+    documentId: receiptId,
+    details: {
+      lineCount: lines.length,
+    },
+  });
+
+  return getReceiptWithLines(receiptId);
 }
 
-function buildReceiptApprovalMovementPayloads(receipt, receiptLines, actor, note) {
-  const documentDatum = safeText(receipt.documentDatumIso || receipt.documentDatum);
-  const typeMateriaal = safeText(receipt.typeMateriaal);
+function buildReceiptMovements_(receipt) {
+  var header = receipt || {};
+  var lines = header.lines || [];
+  var movementType =
+    typeof MOVEMENT_TYPE !== 'undefined' && MOVEMENT_TYPE && MOVEMENT_TYPE.RECEIPT_IN
+      ? MOVEMENT_TYPE.RECEIPT_IN
+      : 'ReceiptIn';
 
-  return (receiptLines || [])
-    .filter(line => safeNumber(line.ontvangenAantal, 0) > 0)
-    .map(line => ({
-      datumDocument: documentDatum,
-      typeMutatie: 'Ontvangst',
-      bronId: receipt.ontvangstId,
-      typeMateriaal: typeMateriaal || determineMaterialTypeFromArticle(line.artikelCode),
-      artikelCode: line.artikelCode,
-      artikelOmschrijving: line.artikelOmschrijving,
-      eenheid: line.eenheid,
-      aantalIn: safeNumber(line.ontvangenAantal, 0),
-      aantalUit: 0,
-      nettoAantal: safeNumber(line.ontvangenAantal, 0),
-      locatieVan: '',
-      locatieNaar: LOCATION.CENTRAL,
-      reden: safeText(line.redenDelta),
-      opmerking: safeText(line.opmerking || note),
-      goedgekeurdDoor: actor,
-      goedgekeurdOp: nowStamp()
-    }));
+  return lines
+    .filter(function (line) {
+      return safeNumber(line.ontvangenAantal, 0) > 0;
+    })
+    .map(function (line) {
+      return buildMovementObject({
+        movementType: movementType,
+        bronType: 'Ontvangst',
+        bronId: header.receiptId,
+        datumBoeking: header.ontvangstDatum || header.documentDatum,
+        artikelCode: line.artikelCode,
+        artikelOmschrijving: line.artikelOmschrijving,
+        typeMateriaal: line.typeMateriaal,
+        eenheid: line.eenheid,
+        aantalIn: line.ontvangenAantal,
+        aantalUit: 0,
+        nettoAantal: safeNumber(line.ontvangenAantal, 0),
+        locatieVan: '',
+        locatieNaar: LOCATION.CENTRAL,
+        reden: 'Ontvangst',
+        opmerking: line.opmerking || header.opmerking,
+        actor: header.actor,
+      });
+    });
 }
 
 function approveReceipt(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertManagerAccess(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertManagerAccess(sessionId);
+  var receiptId = safeText(payload.receiptId);
+  if (!receiptId) throw new Error('ReceiptId ontbreekt.');
 
-  const ontvangstId = safeText(payload.ontvangstId);
-  const actor = safeText(payload.actor || user.naam || 'Manager');
-  const note = safeText(payload.note);
-
-  if (!ontvangstId) throw new Error('OntvangstID ontbreekt.');
-
-  const receipt = getReceiptById(ontvangstId);
-  if (!receipt) throw new Error('Ontvangst niet gevonden.');
-
-  const receiptLines = getReceiptLinesByReceiptId(ontvangstId);
-  if (!receiptLines.length) {
-    throw new Error('Deze ontvangst bevat geen actieve lijnen.');
+  if (typeof replaceSourceMovements !== 'function') {
+    throw new Error('Movement service ontbreekt. Werk eerst het movementblok in.');
   }
 
-  updateReceiptHeader(ontvangstId, {
-    Status: RECEIPT_STATUS.APPROVED,
-    GoedgekeurdDoor: actor,
-    GoedgekeurdOp: nowStamp(),
-    ManagerOpmerking: note
+  var receipt = getReceiptWithLines(receiptId);
+  if (!receipt) throw new Error('Ontvangst niet gevonden.');
+  if (safeText(receipt.status) !== getReceiptStatusSubmitted_()) {
+    throw new Error('Ontvangst staat niet in ingediende status.');
+  }
+
+  validateReceiptLines_(receipt.lines || []);
+
+  var movements = buildReceiptMovements_(receipt);
+  replaceSourceMovements('Ontvangst', receipt.receiptId, movements);
+
+  var table = getAllValues(getReceiptHeaderTab_());
+  if (!table.length) throw new Error('Ontvangsttab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var rows = readObjectsSafe(getReceiptHeaderTab_()).map(function (row) {
+    var current = mapReceiptHeader(row);
+    if (safeText(current.receiptId) !== receiptId) {
+      return row;
+    }
+
+    row.Status = getReceiptStatusApproved_();
+    row.GoedgekeurdOp = toDisplayDateTime(nowRaw);
+    return row;
   });
 
-  const movementPayloads = buildReceiptApprovalMovementPayloads(receipt, receiptLines, actor, note);
-
-  replaceSourceMovements('Ontvangst', ontvangstId, movementPayloads);
-  rebuildCentralWarehouseOverview();
-
-  markManagerNotificationsBySource('Ontvangst', ontvangstId);
-
-  pushWarehouseNotification(
-    'OntvangstGoedgekeurd',
-    'Ontvangst goedgekeurd',
-    `Ontvangst ${ontvangstId} is goedgekeurd en geboekt in centraal magazijn.`,
-    'Ontvangst',
-    ontvangstId
+  writeFullTable(
+    getReceiptHeaderTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
   );
 
-  writeAudit(
-    'Ontvangst goedgekeurd',
-    user.rol,
-    actor,
-    'Ontvangst',
-    ontvangstId,
-    {
-      note: note,
-      typeMateriaal: receipt.typeMateriaal,
-      lijnen: movementPayloads.length
-    }
-  );
+  if (typeof rebuildCentralWarehouseOverview === 'function') {
+    rebuildCentralWarehouseOverview();
+  }
+
+  if (typeof markNotificationsProcessedBySource === 'function') {
+    markNotificationsProcessedBySource({
+      sessionId: sessionId,
+      bronType: 'Ontvangst',
+      bronId: receiptId,
+    });
+  }
+
+  writeAudit({
+    actie: 'APPROVE_RECEIPT',
+    actor: actor,
+    documentType: 'Ontvangst',
+    documentId: receiptId,
+    details: {
+      movementCount: movements.length,
+      totalReceived: (receipt.lines || []).reduce(function (sum, line) {
+        return sum + safeNumber(line.ontvangenAantal, 0);
+      }, 0),
+    },
+  });
+
+  return getReceiptWithLines(receiptId);
+}
+
+/* ---------------------------------------------------------
+   Queries for screens
+   --------------------------------------------------------- */
+
+function filterReceiptsForUser_(rows, user) {
+  if (roleAllowed(user, [ROLE.MANAGER])) {
+    return rows;
+  }
+
+  if (roleAllowed(user, [ROLE.WAREHOUSE])) {
+    return rows;
+  }
+
+  return [];
+}
+
+function getReceiptsData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+  var rows = filterReceiptsForUser_(getReceiptsWithLines(), actor);
 
   return {
-    success: true,
-    message: 'Ontvangst goedgekeurd en centraal magazijn bijgewerkt.'
+    items: rows,
+    receipts: rows,
+    summary: {
+      totaal: rows.length,
+      open: rows.filter(function (x) { return safeText(x.status) === getReceiptStatusOpen_(); }).length,
+      ingediend: rows.filter(function (x) { return safeText(x.status) === getReceiptStatusSubmitted_(); }).length,
+      goedgekeurd: rows.filter(function (x) { return safeText(x.status) === getReceiptStatusApproved_(); }).length,
+      gesloten: rows.filter(function (x) { return safeText(x.status) === getReceiptStatusClosed_(); }).length,
+      deltaLijnen: rows.reduce(function (sum, item) {
+        return sum + safeNumber(item.deltaLijnen, 0);
+      }, 0),
+    }
   };
 }

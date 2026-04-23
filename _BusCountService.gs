@@ -1,646 +1,775 @@
 /* =========================================================
-   43_BusCountService.gs — busstocktellingen
+   43_BusCountService.gs
+   Refactor: bus count core service
+   Doel:
+   - centrale documentlaag voor bustellingen
+   - volledige of gerichte tellingen per technieker
+   - lijnen bewaren
+   - indienen
+   - goedkeuren en correctiemutaties boeken
    ========================================================= */
 
-function makeBusCountId() {
-  return makeStampedId('T');
+/* ---------------------------------------------------------
+   Tabs / fallbacks
+   --------------------------------------------------------- */
+
+function getBusCountHeaderTab_() {
+  return TABS.BUS_COUNTS || 'BusTellingen';
 }
 
-function getAllBusCounts() {
-  return readObjectsSafe(TABS.BUS_COUNTS)
-    .map(mapBusCount)
-    .sort((a, b) =>
-      `${safeText(b.documentDatumIso)} ${safeText(b.tellingId)}`.localeCompare(
-        `${safeText(a.documentDatumIso)} ${safeText(a.tellingId)}`
-      )
-    );
+function getBusCountLineTab_() {
+  return TABS.BUS_COUNT_LINES || 'BusTelLijnen';
+}
+
+function getBusCountStatusOpen_() {
+  if (typeof BUS_COUNT_STATUS !== 'undefined' && BUS_COUNT_STATUS && BUS_COUNT_STATUS.OPEN) {
+    return BUS_COUNT_STATUS.OPEN;
+  }
+  return 'Open';
+}
+
+function getBusCountStatusSubmitted_() {
+  if (typeof BUS_COUNT_STATUS !== 'undefined' && BUS_COUNT_STATUS && BUS_COUNT_STATUS.SUBMITTED) {
+    return BUS_COUNT_STATUS.SUBMITTED;
+  }
+  return 'Ingediend';
+}
+
+function getBusCountStatusApproved_() {
+  if (typeof BUS_COUNT_STATUS !== 'undefined' && BUS_COUNT_STATUS && BUS_COUNT_STATUS.APPROVED) {
+    return BUS_COUNT_STATUS.APPROVED;
+  }
+  return 'Goedgekeurd';
+}
+
+function getBusCountStatusClosed_() {
+  if (typeof BUS_COUNT_STATUS !== 'undefined' && BUS_COUNT_STATUS && BUS_COUNT_STATUS.CLOSED) {
+    return BUS_COUNT_STATUS.CLOSED;
+  }
+  return 'Gesloten';
+}
+
+function getBusCountScopeFull_() {
+  return 'FULL';
+}
+
+function getBusCountScopeTargeted_() {
+  return 'TARGETED';
+}
+
+function getBusCountMovementIn_() {
+  if (typeof MOVEMENT_TYPE !== 'undefined' && MOVEMENT_TYPE && MOVEMENT_TYPE.BUS_COUNT_IN) {
+    return MOVEMENT_TYPE.BUS_COUNT_IN;
+  }
+  return 'BusCorrectieIn';
+}
+
+function getBusCountMovementOut_() {
+  if (typeof MOVEMENT_TYPE !== 'undefined' && MOVEMENT_TYPE && MOVEMENT_TYPE.BUS_COUNT_OUT) {
+    return MOVEMENT_TYPE.BUS_COUNT_OUT;
+  }
+  return 'BusCorrectieUit';
+}
+
+function isBusCountEditable_(status) {
+  var value = safeText(status);
+  return !value || value === getBusCountStatusOpen_();
+}
+
+function makeBusCountId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'BCT-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+function makeBusCountLineId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'BCL-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+/* ---------------------------------------------------------
+   Mapping
+   --------------------------------------------------------- */
+
+function mapBusCountHeader(row) {
+  return {
+    busCountId: safeText(row.BusCountID || row.BusCountId || row.BusTellingID || row.ID),
+    techniekerCode: safeText(row.TechniekerCode || row.TechnicianCode || row.TechCode),
+    techniekerNaam: safeText(row.TechniekerNaam || row.TechnicianName),
+    scopeType: safeText(row.ScopeType || getBusCountScopeFull_()),
+    requestedBy: safeText(row.RequestedBy || row.AangevraagdDoor),
+    reason: safeText(row.Reason || row.Reden),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    status: safeText(row.Status),
+    actor: safeText(row.Actor),
+    opmerking: safeText(row.Opmerking),
+    aangemaaktOp: safeText(row.AangemaaktOp),
+    aangemaaktOpRaw: safeText(row.AangemaaktOpRaw || row.AangemaaktOp),
+    ingediendOp: safeText(row.IngediendOp),
+    goedgekeurdOp: safeText(row.GoedgekeurdOp),
+  };
+}
+
+function mapBusCountLine(row) {
+  var systemQty = safeNumber(row.SystemAantal || row.SystemQty, 0);
+  var countedQty = safeNumber(row.GeteldAantal || row.CountedQty, 0);
+
+  return {
+    busCountLineId: safeText(row.BusCountLineID || row.BusCountLineId || row.BusTellingLijnID || row.ID),
+    busCountId: safeText(row.BusCountID || row.BusCountId || row.BusTellingID),
+    artikelCode: safeText(row.ArtikelCode || row.ArtikelNr),
+    artikelOmschrijving: safeText(row.ArtikelOmschrijving || row.Artikel),
+    typeMateriaal: safeText(row.TypeMateriaal || determineMaterialTypeFromArticle(safeText(row.ArtikelCode || row.ArtikelNr))),
+    eenheid: safeText(row.Eenheid || row.Unit),
+    systemAantal: systemQty,
+    geteldAantal: countedQty,
+    deltaAantal: safeNumber(row.DeltaAantal, countedQty - systemQty),
+    opmerking: safeText(row.Opmerking),
+  };
+}
+
+/* ---------------------------------------------------------
+   Read layer
+   --------------------------------------------------------- */
+
+function getAllBusCountHeaders() {
+  return readObjectsSafe(getBusCountHeaderTab_())
+    .map(mapBusCountHeader)
+    .sort(function (a, b) {
+      return (
+        safeText(b.documentDatumIso).localeCompare(safeText(a.documentDatumIso)) ||
+        safeText(b.busCountId).localeCompare(safeText(a.busCountId))
+      );
+    });
 }
 
 function getAllBusCountLines() {
-  return readObjectsSafe(TABS.BUS_COUNT_LINES)
+  return readObjectsSafe(getBusCountLineTab_())
     .map(mapBusCountLine)
-    .filter(line => line.actief);
+    .sort(function (a, b) {
+      return (
+        safeText(a.busCountId).localeCompare(safeText(b.busCountId)) ||
+        safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving))
+      );
+    });
 }
 
-function getBusCountById(tellingId) {
-  const id = safeText(tellingId);
+function getBusCountHeaderById(busCountId) {
+  var id = safeText(busCountId);
   if (!id) return null;
-  return getAllBusCounts().find(item => item.tellingId === id) || null;
+
+  return getAllBusCountHeaders().find(function (item) {
+    return safeText(item.busCountId) === id;
+  }) || null;
 }
 
-function getBusCountLinesById(tellingId) {
-  const id = safeText(tellingId);
-  if (!id) return [];
-  return getAllBusCountLines().filter(line => line.tellingId === id);
+function getBusCountLinesById(busCountId) {
+  var id = safeText(busCountId);
+  return getAllBusCountLines().filter(function (item) {
+    return safeText(item.busCountId) === id;
+  });
 }
 
-function buildBusCountsWithLines(counts, lines) {
-  const linesByCount = {};
+function buildBusCountsWithLines(headers, lines) {
+  var lineMap = {};
 
-  (lines || []).forEach(line => {
-    const id = safeText(line.tellingId);
-    if (!id) return;
-
-    if (!linesByCount[id]) linesByCount[id] = [];
-    linesByCount[id].push(line);
+  (lines || []).forEach(function (line) {
+    var id = safeText(line.busCountId);
+    if (!lineMap[id]) lineMap[id] = [];
+    lineMap[id].push(line);
   });
 
-  return (counts || []).map(count => ({
-    ...count,
-    lines: linesByCount[count.tellingId] || [],
-    lineCount: (linesByCount[count.tellingId] || []).length
-  }));
-}
-
-function buildBusCountLineObject(tellingId, line) {
-  const artikelCode = safeText(line.artikelCode);
-  const article = getArticleMaster(artikelCode);
-
-  const systeemAantal = safeNumber(line.systeemAantal, 0);
-  const geteldAantal = line.geteldAantal === '' || line.geteldAantal == null
-    ? ''
-    : safeNumber(line.geteldAantal, 0);
-
-  const deltaAantal = geteldAantal === ''
-    ? ''
-    : safeNumber(geteldAantal, 0) - systeemAantal;
-
-  return {
-    TellingID: safeText(tellingId),
-    ArtikelCode: artikelCode,
-    ArtikelOmschrijving: safeText(line.artikelOmschrijving) || safeText(article && article.artikelOmschrijving),
-    Eenheid: safeText(line.eenheid) || safeText(article && article.eenheid),
-    SysteemAantal: systeemAantal,
-    GeteldAantal: geteldAantal,
-    DeltaAantal: deltaAantal,
-    Actief: 'Ja'
-  };
-}
-
-function replaceBusCountLinesForCount(tellingId, lineObjects) {
-  const id = safeText(tellingId);
-
-  const sheet = getSheetOrThrow(TABS.BUS_COUNT_LINES);
-  const values = sheet.getDataRange().getValues();
-  const headers = values.length ? values[0].map(h => safeText(h)) : getHeaders(TABS.BUS_COUNT_LINES);
-  const col = getColMap(headers);
-  const existingRows = values.length > 1 ? values.slice(1) : [];
-
-  const keptRows = existingRows.filter(row => safeText(row[col['TellingID']]) !== id);
-  const newRows = (lineObjects || []).map(obj => buildRowFromHeaders(headers, obj));
-
-  writeFullTable(TABS.BUS_COUNT_LINES, headers, keptRows.concat(newRows));
-
-  return {
-    success: true,
-    lines: newRows.length
-  };
-}
-
-function updateBusCountHeader(tellingId, updates) {
-  const id = safeText(tellingId);
-
-  const sheet = getSheetOrThrow(TABS.BUS_COUNTS);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) throw new Error('Tab BusStockTellingen is leeg.');
-
-  const headers = values[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  let updated = false;
-
-  for (let i = 1; i < values.length; i++) {
-    if (safeText(values[i][col['TellingID']]) !== id) continue;
-
-    Object.keys(updates || {}).forEach(field => {
-      if (col[field] !== undefined) {
-        values[i][col[field]] = updates[field];
-      }
+  return (headers || []).map(function (header) {
+    var countLines = lineMap[safeText(header.busCountId)] || [];
+    return Object.assign({}, header, {
+      lines: countLines,
+      lineCount: countLines.length,
+      afwijkingen: countLines.filter(function (line) {
+        return safeNumber(line.deltaAantal, 0) !== 0;
+      }).length,
     });
-
-    updated = true;
-    break;
-  }
-
-  if (!updated) {
-    throw new Error('Busstocktelling niet gevonden.');
-  }
-
-  if (values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
-  }
-
-  return { success: true };
+  });
 }
 
-function replaceBusCountMovements(tellingId, movementPayloads) {
-  const id = safeText(tellingId);
+function getBusCountsWithLines() {
+  return buildBusCountsWithLines(getAllBusCountHeaders(), getAllBusCountLines());
+}
 
-  const sheet = getSheetOrThrow(TABS.WAREHOUSE_MOVEMENTS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values.length ? values[0].map(h => safeText(h)) : getHeaders(TABS.WAREHOUSE_MOVEMENTS);
-  const col = getColMap(headers);
-  const existingRows = values.length > 1 ? values.slice(1) : [];
+function getBusCountWithLines(busCountId) {
+  var header = getBusCountHeaderById(busCountId);
+  if (!header) return null;
+  return buildBusCountsWithLines([header], getBusCountLinesById(busCountId))[0] || null;
+}
 
-  const keptRows = existingRows.filter(row => {
-    const bronId = safeText(row[col['BronID']]);
-    const typeMutatie = safeText(row[col['TypeMutatie']]);
+/* ---------------------------------------------------------
+   Helpers / snapshots
+   --------------------------------------------------------- */
 
-    if (bronId !== id) return true;
-    if (typeMutatie !== 'BusCorrectieIn' && typeMutatie !== 'BusCorrectieUit') return true;
-    return false;
-  });
+function getBusCountTechnicianCodeFromActor_(actor, payloadTechCode) {
+  var explicitCode = safeText(payloadTechCode);
+  if (explicitCode) return explicitCode;
 
-  const newRows = (movementPayloads || []).map(payload =>
-    buildRowFromHeaders(headers, {
-      MutatieID: makeMovementId(),
-      DatumBoeking: nowStamp(),
-      DatumDocument: safeText(payload.datumDocument),
-      TypeMutatie: safeText(payload.typeMutatie),
-      BronID: id,
-      TypeMateriaal: safeText(payload.typeMateriaal),
-      ArtikelCode: safeText(payload.artikelCode),
-      ArtikelOmschrijving: safeText(payload.artikelOmschrijving),
-      Eenheid: safeText(payload.eenheid),
-      AantalIn: safeNumber(payload.aantalIn, 0),
-      AantalUit: safeNumber(payload.aantalUit, 0),
-      NettoAantal: safeNumber(payload.nettoAantal, 0),
-      LocatieVan: safeText(payload.locatieVan),
-      LocatieNaar: safeText(payload.locatieNaar),
-      Reden: safeText(payload.reden),
-      Opmerking: safeText(payload.opmerking),
-      GoedgekeurdDoor: safeText(payload.goedgekeurdDoor),
-      GoedgekeurdOp: safeText(payload.goedgekeurdOp)
-    })
+  return safeText(
+    actor &&
+    (
+      actor.techniekerCode ||
+      actor.technicianCode ||
+      actor.code
+    )
   );
+}
 
-  writeFullTable(TABS.WAREHOUSE_MOVEMENTS, headers, keptRows.concat(newRows));
+function buildCurrentBusSnapshotRows_(techniekerCode) {
+  if (typeof buildBusStockRowsForTechnician === 'function') {
+    return buildBusStockRowsForTechnician(techniekerCode);
+  }
+  return [];
+}
+
+function buildCurrentBusSnapshotMap_(techniekerCode) {
+  if (typeof buildBusStockMapForTechnician === 'function') {
+    return buildBusStockMapForTechnician(techniekerCode);
+  }
+
+  var map = {};
+  buildCurrentBusSnapshotRows_(techniekerCode).forEach(function (row) {
+    map[row.artikelCode] = row;
+  });
+  return map;
+}
+
+function deriveBusCountScopeRows_(techniekerCode, scopeType, articleCodes) {
+  var currentRows = buildCurrentBusSnapshotRows_(techniekerCode);
+
+  if (safeText(scopeType) !== getBusCountScopeTargeted_()) {
+    return currentRows;
+  }
+
+  var allowed = {};
+  (Array.isArray(articleCodes) ? articleCodes : []).forEach(function (code) {
+    var key = safeText(code);
+    if (key) {
+      allowed[key] = true;
+    }
+  });
+
+  return currentRows.filter(function (row) {
+    return !!allowed[safeText(row.artikelCode)];
+  });
+}
+
+/* ---------------------------------------------------------
+   Normalization / validation
+   --------------------------------------------------------- */
+
+function normalizeBusCountHeaderPayload_(payload) {
+  payload = payload || {};
 
   return {
-    success: true,
-    lines: newRows.length
+    sessionId: getPayloadSessionId(payload),
+    techniekerCode: safeText(payload.techniekerCode || payload.technicianCode || payload.techCode),
+    techniekerNaam: safeText(payload.techniekerNaam || payload.technicianName),
+    scopeType: safeText(payload.scopeType || payload.scope || getBusCountScopeFull_()),
+    requestedBy: safeText(payload.requestedBy),
+    reason: safeText(payload.reason || payload.reden),
+    documentDatum: safeText(payload.documentDatum || payload.documentDate),
+    opmerking: safeText(payload.opmerking || payload.remark),
+    actor: safeText(payload.actor),
   };
 }
 
-function canUserCreateBusCount(user) {
-  return roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER]);
-}
+function normalizeBusCountLines_(lines) {
+  return (Array.isArray(lines) ? lines : []).map(function (line) {
+    var systemQty = safeNumber(line.systemAantal || line.systemQty, 0);
+    var countedQty = safeNumber(line.geteldAantal || line.countedQty, 0);
 
-function canUserEditBusCount(count, user) {
-  if (!count || !user) return false;
-  if (user.rol === ROLE.ADMIN) return true;
-  if (user.rol === ROLE.MANAGER) return true;
-
-  if (user.rol === ROLE.TECHNICIAN) {
-    return normalizeRef(count.techniekerCode) === normalizeRef(user.techniekerCode);
-  }
-
-  return false;
-}
-
-function assertBusCountTechnicianAccess(count, user) {
-  if (!count) throw new Error('Busstocktelling niet gevonden.');
-  if (!canUserEditBusCount(count, user)) {
-    throw new Error('Je kan enkel je eigen busstocktelling aanpassen.');
-  }
-}
-
-function buildBusCountRequestLineObjects(techniekerCode, requestedArticleCodes, tellingId) {
-  const busStock = buildBusStockRows()
-    .filter(item => normalizeRef(item.techniekerCode) === normalizeRef(techniekerCode));
-
-  const busStockMap = {};
-  busStock.forEach(item => {
-    busStockMap[item.artikelCode] = item;
-  });
-
-  const articleMaster = getArticleMasterMap();
-
-  const codes = (requestedArticleCodes || []).map(safeText).filter(Boolean);
-  const uniqueCodes = [...new Set(codes)];
-
-  return uniqueCodes.map(code => {
-    const busItem = busStockMap[code] || null;
-    const article = articleMaster[code] || null;
-
-    return buildBusCountLineObject(tellingId, {
-      artikelCode: code,
-      artikelOmschrijving: busItem ? busItem.artikelOmschrijving : safeText(article && article.artikelOmschrijving),
-      eenheid: busItem ? busItem.eenheid : safeText(article && article.eenheid),
-      systeemAantal: busItem ? safeNumber(busItem.voorraadBus, 0) : 0,
-      geteldAantal: ''
-    });
+    return {
+      artikelCode: safeText(line.artikelCode || line.artikelNr),
+      artikelOmschrijving: safeText(line.artikelOmschrijving || line.artikel),
+      typeMateriaal: safeText(line.typeMateriaal || determineMaterialTypeFromArticle(safeText(line.artikelCode || line.artikelNr))),
+      eenheid: safeText(line.eenheid || line.unit || 'Stuk'),
+      systemAantal: systemQty,
+      geteldAantal: countedQty,
+      deltaAantal: safeNumber(line.deltaAantal, countedQty - systemQty),
+      opmerking: safeText(line.opmerking),
+    };
   });
 }
+
+function validateBusCountHeader_(payload) {
+  if (!payload.sessionId) throw new Error('Sessie ontbreekt.');
+  if (!payload.techniekerCode) throw new Error('TechniekerCode is verplicht.');
+  if (!payload.documentDatum) throw new Error('Documentdatum is verplicht.');
+  return true;
+}
+
+function validateBusCountLines_(lines) {
+  if (!lines.length) {
+    throw new Error('Geen tellijnen ontvangen.');
+  }
+
+  lines.forEach(function (line, index) {
+    var rowNr = index + 1;
+
+    if (!safeText(line.artikelCode)) {
+      throw new Error('Artikelcode ontbreekt op lijn ' + rowNr + '.');
+    }
+    if (safeNumber(line.geteldAantal, 0) < 0) {
+      throw new Error('Geteld aantal mag niet negatief zijn op lijn ' + rowNr + '.');
+    }
+  });
+
+  return true;
+}
+
+/* ---------------------------------------------------------
+   Access policy
+   --------------------------------------------------------- */
+
+function assertBusCountReadAccess_(sessionId, techniekerCode) {
+  var user = requireLoggedInUser(sessionId);
+
+  if (roleAllowed(user, [ROLE.MANAGER, ROLE.WAREHOUSE])) {
+    return user;
+  }
+
+  assertRoleAllowed(user, [ROLE.TECHNICIAN], 'Geen rechten voor bustellingen.');
+
+  var ownCode = getBusCountTechnicianCodeFromActor_(user, '');
+  if (safeText(ownCode) !== safeText(techniekerCode)) {
+    throw new Error('Geen toegang tot deze bustelling.');
+  }
+
+  return user;
+}
+
+function assertBusCountWriteAccess_(sessionId, techniekerCode) {
+  return assertBusCountReadAccess_(sessionId, techniekerCode);
+}
+
+function assertBusCountApproveAccess_(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(user, [ROLE.MANAGER, ROLE.WAREHOUSE], 'Geen rechten om bustellingen goed te keuren.');
+  return user;
+}
+
+/* ---------------------------------------------------------
+   Create / save
+   --------------------------------------------------------- */
 
 function createBusCountRequest(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  var normalized = normalizeBusCountHeaderPayload_(payload);
+  var actor = assertBusCountWriteAccess_(normalized.sessionId, normalized.techniekerCode);
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = requireLoggedInUser(sessionId);
+  validateBusCountHeader_(normalized);
 
-  if (!canUserCreateBusCount(user)) {
-    throw new Error('Geen rechten om een busstocktelling aan te maken.');
-  }
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var busCountId = makeBusCountId_();
 
-  const techniekerCode = safeText(payload.techniekerCode);
-  const documentDatum = safeText(payload.documentDatum);
-  const actor = safeText(payload.actor || user.naam || user.email || 'Magazijn');
-  const reden = safeText(payload.reden);
-  const requestedArticles = Array.isArray(payload.requestedArticles) ? payload.requestedArticles : [];
-
-  if (!techniekerCode) throw new Error('Technieker is verplicht.');
-  if (!documentDatum) throw new Error('Documentdatum is verplicht.');
-  if (!reden) throw new Error('Reden is verplicht.');
-
-  const techniekerNaam = getTechnicianNameByCode(techniekerCode);
-  const busStockRows = buildBusStockRows()
-    .filter(item => normalizeRef(item.techniekerCode) === normalizeRef(techniekerCode));
-
-  const articleCodes = requestedArticles.length
-    ? requestedArticles.map(safeText).filter(Boolean)
-    : busStockRows.map(item => safeText(item.artikelCode));
-
-  const uniqueCodes = [...new Set(articleCodes)];
-  if (!uniqueCodes.length) {
-    throw new Error('Geen artikels gevonden voor busstocktelling.');
-  }
-
-  const tellingId = makeBusCountId();
-  const scopeType = requestedArticles.length ? 'Gericht' : 'Volledig';
-  const scopeArtikelCodes = requestedArticles.length ? uniqueCodes.join(', ') : '';
-
-  appendObjects(TABS.BUS_COUNTS, [{
-    TellingID: tellingId,
-    TechniekerCode: techniekerCode,
-    TechniekerNaam: techniekerNaam,
-    DocumentDatum: documentDatum,
-    Status: BUS_COUNT_STATUS.OPEN,
-    ScopeType: scopeType,
-    ScopeArtikelCodes: scopeArtikelCodes,
-    Reden: reden,
-    AangemaaktDoor: actor,
-    AangemaaktOp: nowStamp(),
-    IngediendDoor: '',
+  var obj = {
+    BusCountID: busCountId,
+    TechniekerCode: normalized.techniekerCode,
+    TechniekerNaam: normalized.techniekerNaam,
+    ScopeType: normalized.scopeType || getBusCountScopeFull_(),
+    RequestedBy: normalized.requestedBy || safeText(actor.naam || actor.email),
+    Reason: normalized.reason,
+    DocumentDatum: normalized.documentDatum,
+    DocumentDatumIso: normalized.documentDatum,
+    Status: getBusCountStatusOpen_(),
+    Actor: normalized.actor || safeText(actor.naam || actor.email),
+    Opmerking: normalized.opmerking,
+    AangemaaktOp: toDisplayDateTime(nowRaw),
+    AangemaaktOpRaw: nowRaw,
     IngediendOp: '',
-    GoedgekeurdDoor: '',
     GoedgekeurdOp: '',
-    ManagerOpmerking: ''
-  }]);
-
-  const lineObjects = buildBusCountRequestLineObjects(techniekerCode, uniqueCodes, tellingId);
-  appendObjects(TABS.BUS_COUNT_LINES, lineObjects);
-
-  pushTechnicianNotification(
-    techniekerCode,
-    techniekerNaam,
-    'Busstocktelling',
-    'Nieuwe busstocktelling',
-    `Er staat een ${scopeType.toLowerCase()} busstocktelling klaar (${tellingId}). Vul deze in en dien ze in.`,
-    'Busstocktelling',
-    tellingId
-  );
-
-  writeAudit(
-    'Busstocktelling aangemaakt',
-    user.rol,
-    actor,
-    'Busstocktelling',
-    tellingId,
-    {
-      techniekerCode: techniekerCode,
-      techniekerNaam: techniekerNaam,
-      scopeType: scopeType,
-      scopeArtikelCodes: scopeArtikelCodes,
-      lijnen: lineObjects.length,
-      reden: reden
-    }
-  );
-
-  return {
-    success: true,
-    tellingId,
-    message: 'Busstocktelling aangemaakt.'
   };
-}
 
-function createBusCountRequestFromAlert(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  appendObjects(getBusCountHeaderTab_(), [obj]);
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = requireLoggedInUser(sessionId);
-
-  if (!canUserCreateBusCount(user)) {
-    throw new Error('Geen rechten om een gerichte telling aan te maken.');
-  }
-
-  const techniekerCode = safeText(payload.techniekerCode);
-  const documentDatum = safeText(payload.documentDatum);
-  const actor = safeText(payload.actor || user.naam || user.email || 'Magazijn');
-  const artikelCode = safeText(payload.artikelCode);
-  const reden = safeText(payload.reden);
-
-  if (!artikelCode) throw new Error('Artikelcode ontbreekt.');
-
-  return createBusCountRequest({
-    sessionId: sessionId,
-    techniekerCode,
-    documentDatum,
-    actor,
-    reden,
-    requestedArticles: [artikelCode]
+  writeAudit({
+    actie: 'CREATE_BUS_COUNT',
+    actor: actor,
+    documentType: 'BusTelling',
+    documentId: busCountId,
+    details: {
+      techniekerCode: normalized.techniekerCode,
+      scopeType: normalized.scopeType,
+      documentDatum: normalized.documentDatum,
+    },
   });
+
+  return mapBusCountHeader(obj);
 }
 
-function getBusCountDataForTechnician(techRef, sessionId) {
-  const access = assertTechnicianAccessToRef(techRef, sessionId);
+function createBusCountDraftFromSnapshot(payload) {
+  payload = payload || {};
 
-  const counts = getAllBusCounts()
-    .filter(item => normalizeRef(item.techniekerCode) === normalizeRef(access.technician.code))
-    .filter(item => item.status !== BUS_COUNT_STATUS.APPROVED)
-    .sort((a, b) =>
-      `${safeText(b.documentDatumIso)} ${safeText(b.tellingId)}`.localeCompare(
-        `${safeText(a.documentDatumIso)} ${safeText(a.tellingId)}`
-      )
-    );
+  var normalized = normalizeBusCountHeaderPayload_(payload);
+  var actor = assertBusCountWriteAccess_(normalized.sessionId, normalized.techniekerCode);
+  var scopeType = safeText(normalized.scopeType || getBusCountScopeFull_());
+  var requestedArticleCodes = Array.isArray(payload.articleCodes) ? payload.articleCodes : [];
 
-  const lines = getAllBusCountLines();
+  var header = createBusCountRequest({
+    sessionId: normalized.sessionId,
+    techniekerCode: normalized.techniekerCode,
+    techniekerNaam: normalized.techniekerNaam,
+    scopeType: scopeType,
+    requestedBy: normalized.requestedBy || safeText(actor.naam || actor.email),
+    reason: normalized.reason || 'Bustelling',
+    documentDatum: normalized.documentDatum,
+    opmerking: normalized.opmerking,
+    actor: normalized.actor || safeText(actor.naam || actor.email),
+  });
 
-  return {
-    counts: buildBusCountsWithLines(counts, lines)
-  };
-}
+  var snapshotRows = deriveBusCountScopeRows_(
+    normalized.techniekerCode,
+    scopeType,
+    requestedArticleCodes
+  );
 
-function validateSavedBusCountLines(lines) {
-  if (!(lines || []).length) {
-    throw new Error('Geen tellinglijnen ontvangen.');
-  }
+  var lines = snapshotRows.map(function (row) {
+    return {
+      artikelCode: row.artikelCode,
+      artikelOmschrijving: row.artikelOmschrijving,
+      typeMateriaal: row.typeMateriaal,
+      eenheid: row.eenheid,
+      systemAantal: safeNumber(row.voorraadBus, 0),
+      geteldAantal: safeNumber(row.voorraadBus, 0),
+      deltaAantal: 0,
+      opmerking: '',
+    };
+  });
 
-  (lines || []).forEach(line => {
-    const code = safeText(line.artikelCode);
-    const qty = safeNumber(line.geteldAantal, 0);
-
-    if (!code) {
-      throw new Error('Artikelcode ontbreekt op een tellinglijn.');
-    }
-
-    if (qty < 0) {
-      throw new Error('Geteld aantal mag niet negatief zijn voor artikel ' + code);
-    }
+  return saveBusCountLines({
+    sessionId: normalized.sessionId,
+    busCountId: header.busCountId,
+    lines: lines,
   });
 }
 
 function saveBusCountLines(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = requireLoggedInUser(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var busCountId = safeText(payload.busCountId);
+  if (!busCountId) throw new Error('BusCountId ontbreekt.');
 
-  const tellingId = safeText(payload.tellingId);
-  const lines = Array.isArray(payload.lines) ? payload.lines : [];
+  var header = getBusCountHeaderById(busCountId);
+  if (!header) throw new Error('Bustelling niet gevonden.');
 
-  if (!tellingId) throw new Error('TellingID ontbreekt.');
-  if (!lines.length) throw new Error('Geen tellinglijnen ontvangen.');
+  var actor = assertBusCountWriteAccess_(sessionId, header.techniekerCode);
 
-  const count = getBusCountById(tellingId);
-  if (!count) throw new Error('Busstocktelling niet gevonden.');
-
-  assertBusCountTechnicianAccess(count, user);
-
-  if ([BUS_COUNT_STATUS.SUBMITTED, BUS_COUNT_STATUS.APPROVED].includes(count.status)) {
-    throw new Error('Deze busstocktelling kan niet meer aangepast worden.');
+  if (!isBusCountEditable_(header.status)) {
+    throw new Error('Bustelling is niet meer bewerkbaar.');
   }
 
-  const existingLines = getBusCountLinesById(tellingId);
-  if (!existingLines.length) {
-    throw new Error('Geen lijnstructuur gevonden voor deze busstocktelling.');
+  var lines = normalizeBusCountLines_(payload.lines);
+  validateBusCountLines_(lines);
+
+  var table = getAllValues(getBusCountLineTab_());
+  var headerRow = table.length ? table[0] : null;
+  var currentRows = readObjectsSafe(getBusCountLineTab_());
+
+  var kept = currentRows.filter(function (row) {
+    return safeText(row.BusCountID || row.BusCountId || row.BusTellingID) !== busCountId;
+  });
+
+  var newRows = lines.map(function (line) {
+    return {
+      BusCountLineID: makeBusCountLineId_(),
+      BusCountID: busCountId,
+      ArtikelCode: line.artikelCode,
+      ArtikelOmschrijving: line.artikelOmschrijving,
+      TypeMateriaal: line.typeMateriaal,
+      Eenheid: line.eenheid,
+      SystemAantal: line.systemAantal,
+      GeteldAantal: line.geteldAantal,
+      DeltaAantal: line.deltaAantal,
+      Opmerking: line.opmerking,
+    };
+  });
+
+  var finalObjects = kept.concat(newRows);
+
+  if (!headerRow && finalObjects.length) {
+    appendObjects(getBusCountLineTab_(), newRows);
+  } else if (headerRow) {
+    writeFullTable(
+      getBusCountLineTab_(),
+      headerRow,
+      finalObjects.map(function (obj) {
+        return buildRowFromHeaders(headerRow, obj);
+      })
+    );
+  } else if (newRows.length) {
+    appendObjects(getBusCountLineTab_(), newRows);
   }
 
-  const inputMap = {};
-  lines.forEach(line => {
-    const code = safeText(line.artikelCode);
-    if (!code) return;
-    inputMap[code] = safeNumber(line.geteldAantal, 0);
+  writeAudit({
+    actie: 'SAVE_BUS_COUNT_LINES',
+    actor: actor,
+    documentType: 'BusTelling',
+    documentId: busCountId,
+    details: {
+      lineCount: lines.length,
+    },
   });
 
-  const rewrittenObjects = existingLines.map(line => {
-    const code = safeText(line.artikelCode);
-    const systeemAantal = safeNumber(line.systeemAantal, 0);
-    const geteldAantal = Object.prototype.hasOwnProperty.call(inputMap, code)
-      ? inputMap[code]
-      : (line.geteldAantal === '' || line.geteldAantal == null ? '' : safeNumber(line.geteldAantal, 0));
-
-    return buildBusCountLineObject(tellingId, {
-      artikelCode: code,
-      artikelOmschrijving: line.artikelOmschrijving,
-      eenheid: line.eenheid,
-      systeemAantal: systeemAantal,
-      geteldAantal: geteldAantal
-    });
-  });
-
-  const validateLines = rewrittenObjects.map(obj => ({
-    artikelCode: obj.ArtikelCode,
-    geteldAantal: obj.GeteldAantal === '' ? 0 : obj.GeteldAantal
-  }));
-
-  validateSavedBusCountLines(validateLines);
-
-  replaceBusCountLinesForCount(tellingId, rewrittenObjects);
-
-  writeAudit(
-    'Busstocktelling opgeslagen',
-    user.rol,
-    user.naam || user.techniekerCode || user.email,
-    'Busstocktelling',
-    tellingId,
-    {
-      lijnen: rewrittenObjects.length
-    }
-  );
-
-  return {
-    success: true,
-    message: 'Busstocktelling opgeslagen.'
-  };
+  return getBusCountWithLines(busCountId);
 }
+
+/* ---------------------------------------------------------
+   Submit / approve
+   --------------------------------------------------------- */
 
 function submitBusCount(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = requireLoggedInUser(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var busCountId = safeText(payload.busCountId);
+  if (!busCountId) throw new Error('BusCountId ontbreekt.');
 
-  const tellingId = safeText(payload.tellingId);
-  const actor = safeText(payload.actor || user.naam || user.techniekerCode || 'Technieker');
+  var count = getBusCountWithLines(busCountId);
+  if (!count) throw new Error('Bustelling niet gevonden.');
 
-  if (!tellingId) throw new Error('TellingID ontbreekt.');
+  var actor = assertBusCountWriteAccess_(sessionId, count.techniekerCode);
 
-  const count = getBusCountById(tellingId);
-  if (!count) throw new Error('Busstocktelling niet gevonden.');
-
-  assertBusCountTechnicianAccess(count, user);
-
-  const lineRows = getBusCountLinesById(tellingId);
-  if (!lineRows.length) {
-    throw new Error('Deze busstocktelling bevat nog geen actieve lijnen.');
+  if (!isBusCountEditable_(count.status)) {
+    throw new Error('Bustelling kan niet meer ingediend worden.');
   }
 
-  if (lineRows.some(row => row.geteldAantal === '' || row.geteldAantal == null)) {
-    throw new Error('Vul eerst alle getelde aantallen in.');
-  }
+  validateBusCountLines_(count.lines || []);
 
-  updateBusCountHeader(tellingId, {
-    Status: BUS_COUNT_STATUS.SUBMITTED,
-    IngediendDoor: actor,
-    IngediendOp: nowStamp()
+  var table = getAllValues(getBusCountHeaderTab_());
+  if (!table.length) throw new Error('Bustellingtab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var rows = readObjectsSafe(getBusCountHeaderTab_()).map(function (row) {
+    var current = mapBusCountHeader(row);
+    if (safeText(current.busCountId) !== busCountId) {
+      return row;
+    }
+
+    row.Status = getBusCountStatusSubmitted_();
+    row.IngediendOp = toDisplayDateTime(nowRaw);
+    return row;
   });
 
-  pushManagerNotification(
-    'BusstocktellingGoedTeKeuren',
-    'Busstocktelling ingediend',
-    `Busstocktelling ${tellingId} is ingediend en wacht op goedkeuring.`,
-    'Busstocktelling',
-    tellingId
+  writeFullTable(
+    getBusCountHeaderTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
   );
 
-  writeAudit(
-    'Busstocktelling ingediend',
-    user.rol,
-    actor,
-    'Busstocktelling',
-    tellingId,
-    {
-      status: BUS_COUNT_STATUS.SUBMITTED,
-      scopeType: count.scopeType
-    }
-  );
+  if (typeof pushWarehouseNotification === 'function') {
+    pushWarehouseNotification(
+      'BusTelling',
+      'Bustelling wacht op goedkeuring',
+      'Er werd een bustelling ingediend die goedkeuring vraagt.',
+      'BusTelling',
+      busCountId,
+      'WAREHOUSE'
+    );
+  }
 
-  return {
-    success: true,
-    message: 'Busstocktelling ingediend voor goedkeuring.'
-  };
+  writeAudit({
+    actie: 'SUBMIT_BUS_COUNT',
+    actor: actor,
+    documentType: 'BusTelling',
+    documentId: busCountId,
+    details: {
+      techniekerCode: count.techniekerCode,
+      afwijkingen: (count.lines || []).filter(function (line) {
+        return safeNumber(line.deltaAantal, 0) !== 0;
+      }).length,
+    },
+  });
+
+  return getBusCountWithLines(busCountId);
 }
 
-function buildBusCountApprovalMovements(count, lineRows, actor, note) {
-  const busLocation = getBusLocationCode(count.techniekerCode);
-  const documentDatum = safeText(count.documentDatumIso || count.documentDatum);
+function buildBusCountCorrectionMovements_(count) {
+  var header = count || {};
+  var lines = header.lines || [];
+  var busLocation = typeof getBusLocationCode === 'function'
+    ? getBusLocationCode(header.techniekerCode)
+    : ('Bus:' + safeText(header.techniekerCode));
 
-  return (lineRows || [])
-    .map(line => {
-      const delta = safeNumber(line.deltaAantal, 0);
-      if (!delta) return null;
+  var movements = [];
 
-      if (delta > 0) {
-        return {
-          datumDocument: documentDatum,
-          typeMutatie: 'BusCorrectieIn',
-          typeMateriaal: determineMaterialTypeFromArticle(line.artikelCode),
-          artikelCode: line.artikelCode,
-          artikelOmschrijving: line.artikelOmschrijving,
-          eenheid: line.eenheid,
-          aantalIn: delta,
-          aantalUit: 0,
-          nettoAantal: delta,
-          locatieVan: '',
-          locatieNaar: busLocation,
-          reden: 'Busstocktelling',
-          opmerking: safeText(note),
-          goedgekeurdDoor: actor,
-          goedgekeurdOp: nowStamp()
-        };
-      }
+  lines.forEach(function (line) {
+    var delta = safeNumber(line.deltaAantal, 0);
+    if (delta === 0) {
+      return;
+    }
 
-      return {
-        datumDocument: documentDatum,
-        typeMutatie: 'BusCorrectieUit',
-        typeMateriaal: determineMaterialTypeFromArticle(line.artikelCode),
+    if (delta > 0) {
+      movements.push(buildMovementObject({
+        movementType: getBusCountMovementIn_(),
+        bronType: 'BusTelling',
+        bronId: header.busCountId,
+        datumBoeking: header.documentDatum,
         artikelCode: line.artikelCode,
         artikelOmschrijving: line.artikelOmschrijving,
+        typeMateriaal: line.typeMateriaal,
         eenheid: line.eenheid,
-        aantalIn: 0,
-        aantalUit: Math.abs(delta),
+        aantalIn: delta,
+        aantalUit: 0,
         nettoAantal: delta,
-        locatieVan: busLocation,
-        locatieNaar: '',
-        reden: 'Busstocktelling',
-        opmerking: safeText(note),
-        goedgekeurdDoor: actor,
-        goedgekeurdOp: nowStamp()
-      };
-    })
-    .filter(Boolean);
+        locatieVan: '',
+        locatieNaar: busLocation,
+        reden: 'Bustelling correctie',
+        opmerking: line.opmerking || header.opmerking,
+        actor: header.actor,
+      }));
+      return;
+    }
+
+    movements.push(buildMovementObject({
+      movementType: getBusCountMovementOut_(),
+      bronType: 'BusTelling',
+      bronId: header.busCountId,
+      datumBoeking: header.documentDatum,
+      artikelCode: line.artikelCode,
+      artikelOmschrijving: line.artikelOmschrijving,
+      typeMateriaal: line.typeMateriaal,
+      eenheid: line.eenheid,
+      aantalIn: 0,
+      aantalUit: Math.abs(delta),
+      nettoAantal: delta,
+      locatieVan: busLocation,
+      locatieNaar: '',
+      reden: 'Bustelling correctie',
+      opmerking: line.opmerking || header.opmerking,
+      actor: header.actor,
+    }));
+  });
+
+  return movements;
 }
 
 function approveBusCount(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertManagerAccess(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertBusCountApproveAccess_(sessionId);
+  var busCountId = safeText(payload.busCountId);
+  if (!busCountId) throw new Error('BusCountId ontbreekt.');
 
-  const tellingId = safeText(payload.tellingId);
-  const actor = safeText(payload.actor || user.naam || 'Manager');
-  const note = safeText(payload.note);
-
-  if (!tellingId) throw new Error('TellingID ontbreekt.');
-
-  const count = getBusCountById(tellingId);
-  if (!count) throw new Error('Busstocktelling niet gevonden.');
-
-  const lineRows = getBusCountLinesById(tellingId);
-  if (!lineRows.length) {
-    throw new Error('Deze busstocktelling bevat geen actieve lijnen.');
+  if (typeof replaceSourceMovements !== 'function') {
+    throw new Error('Movement service ontbreekt. Werk eerst het movementblok in.');
   }
 
-  updateBusCountHeader(tellingId, {
-    Status: BUS_COUNT_STATUS.APPROVED,
-    GoedgekeurdDoor: actor,
-    GoedgekeurdOp: nowStamp(),
-    ManagerOpmerking: note
+  var count = getBusCountWithLines(busCountId);
+  if (!count) throw new Error('Bustelling niet gevonden.');
+  if (safeText(count.status) !== getBusCountStatusSubmitted_()) {
+    throw new Error('Bustelling staat niet in ingediende status.');
+  }
+
+  validateBusCountLines_(count.lines || []);
+
+  var movements = buildBusCountCorrectionMovements_(count);
+  replaceSourceMovements('BusTelling', count.busCountId, movements);
+
+  var table = getAllValues(getBusCountHeaderTab_());
+  if (!table.length) throw new Error('Bustellingtab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var rows = readObjectsSafe(getBusCountHeaderTab_()).map(function (row) {
+    var current = mapBusCountHeader(row);
+    if (safeText(current.busCountId) !== busCountId) {
+      return row;
+    }
+
+    row.Status = getBusCountStatusApproved_();
+    row.GoedgekeurdOp = toDisplayDateTime(nowRaw);
+    return row;
   });
 
-  const movementPayloads = buildBusCountApprovalMovements(count, lineRows, actor, note);
-  replaceBusCountMovements(tellingId, movementPayloads);
-
-  rebuildCentralWarehouseOverview();
-
-  markManagerNotificationsBySource('Busstocktelling', tellingId);
-
-  pushWarehouseNotification(
-    'BusstocktellingGoedgekeurd',
-    'Busstocktelling goedgekeurd',
-    `Busstocktelling ${tellingId} van ${count.techniekerNaam || count.techniekerCode} is goedgekeurd en verwerkt.`,
-    'Busstocktelling',
-    tellingId
+  writeFullTable(
+    getBusCountHeaderTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
   );
 
-  pushTechnicianNotification(
-    count.techniekerCode,
-    count.techniekerNaam,
-    'BusstocktellingGoedgekeurd',
-    'Je busstocktelling is verwerkt',
-    `Busstocktelling ${tellingId} werd goedgekeurd door de manager.`,
-    'Busstocktelling',
-    tellingId
-  );
+  if (typeof markNotificationsProcessedBySource === 'function') {
+    markNotificationsProcessedBySource({
+      sessionId: sessionId,
+      bronType: 'BusTelling',
+      bronId: busCountId,
+    });
+  }
 
-  writeAudit(
-    'Busstocktelling goedgekeurd',
-    user.rol,
-    actor,
-    'Busstocktelling',
-    tellingId,
-    {
+  writeAudit({
+    actie: 'APPROVE_BUS_COUNT',
+    actor: actor,
+    documentType: 'BusTelling',
+    documentId: busCountId,
+    details: {
+      movementCount: movements.length,
       techniekerCode: count.techniekerCode,
-      techniekerNaam: count.techniekerNaam,
-      scopeType: count.scopeType,
-      note: note,
-      mutaties: movementPayloads.length
-    }
+      afwijkingen: (count.lines || []).filter(function (line) {
+        return safeNumber(line.deltaAantal, 0) !== 0;
+      }).length,
+    },
+  });
+
+  return getBusCountWithLines(busCountId);
+}
+
+/* ---------------------------------------------------------
+   Queries for screens
+   --------------------------------------------------------- */
+
+function filterBusCountsForUser_(rows, user) {
+  if (roleAllowed(user, [ROLE.MANAGER, ROLE.WAREHOUSE])) {
+    return rows;
+  }
+
+  if (roleAllowed(user, [ROLE.TECHNICIAN])) {
+    var ownCode = getBusCountTechnicianCodeFromActor_(user, '');
+    return rows.filter(function (item) {
+      return safeText(item.techniekerCode) === safeText(ownCode);
+    });
+  }
+
+  return [];
+}
+
+function getBusCountsData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = requireLoggedInUser(sessionId);
+
+  assertRoleAllowed(
+    actor,
+    [ROLE.TECHNICIAN, ROLE.WAREHOUSE, ROLE.MANAGER],
+    'Geen rechten om bustellingen te bekijken.'
   );
+
+  var rows = filterBusCountsForUser_(getBusCountsWithLines(), actor);
 
   return {
-    success: true,
-    message: 'Busstocktelling goedgekeurd.'
+    items: rows,
+    busCounts: rows,
+    summary: {
+      totaal: rows.length,
+      open: rows.filter(function (x) { return safeText(x.status) === getBusCountStatusOpen_(); }).length,
+      ingediend: rows.filter(function (x) { return safeText(x.status) === getBusCountStatusSubmitted_(); }).length,
+      goedgekeurd: rows.filter(function (x) { return safeText(x.status) === getBusCountStatusApproved_(); }).length,
+      gesloten: rows.filter(function (x) { return safeText(x.status) === getBusCountStatusClosed_(); }).length,
+      afwijkingen: rows.reduce(function (sum, item) {
+        return sum + safeNumber(item.afwijkingen, 0);
+      }, 0),
+    }
   };
 }

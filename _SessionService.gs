@@ -1,39 +1,49 @@
 /* =========================================================
-   11_SessionService.gs — sessies / huidige gebruiker
+   11_SessionService.gs
+   Refactor: session core service
+   Doel:
+   - centrale sessielaag voor code-login
+   - admin Google-auth blijft ondersteund als fallback
+   - sessies lezen / aanmaken / ongeldig maken / opschonen
    ========================================================= */
 
-function getCurrentSessionEmailSafe() {
-  try {
-    return String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
-  } catch (e) {
-    return '';
-  }
+/* ---------------------------------------------------------
+   Tabs / config / helpers
+   --------------------------------------------------------- */
+
+function getSessionsTab_() {
+  return TABS.SESSIONS || 'Sessies';
 }
 
-function getAuthModeForUser(user) {
-  if (!user) return '';
-  return user.rol === ROLE.ADMIN ? 'admin_google' : 'custom_session';
+function getSessionHours_() {
+  return safeNumber((APP_CONFIG && APP_CONFIG.SESSION_HOURS) || 12, 12);
 }
 
-function getEffectiveLoginEmail(user) {
-  return normalizeLoginEmail((user && (user.loginEmail || user.email)) || '');
+function makeSessionId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'SID-' + stamp + '-' + makeUuidId().slice(0, 8).toUpperCase();
 }
 
-function getSessionDurationHours() {
-  return Number(APP_CONFIG.SESSION_HOURS || 12);
+function getNowRaw_() {
+  return Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
 }
 
-function makeSessionId() {
-  return makeUuidId('S');
+function getExpiryRawFromNow_(hours) {
+  var dt = new Date();
+  dt.setHours(dt.getHours() + safeNumber(hours, getSessionHours_()));
+  return Utilities.formatDate(dt, TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
 }
 
-function formatSessionDateTime_(dateValue) {
-  return Utilities.formatDate(dateValue, getAppTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+function isIsoDateTimeExpired_(rawValue) {
+  var raw = safeText(rawValue);
+  if (!raw) return true;
+  return raw < getNowRaw_();
 }
 
 function withSessionLock_(fn) {
-  const lock = LockService.getScriptLock();
+  var lock = LockService.getScriptLock();
   lock.waitLock(30000);
+
   try {
     return fn();
   } finally {
@@ -41,185 +51,347 @@ function withSessionLock_(fn) {
   }
 }
 
-function getAllSessions() {
-  return readObjectsSafe(TABS.SESSIONS).map(mapSession);
+/* ---------------------------------------------------------
+   Mapping / read layer
+   --------------------------------------------------------- */
+
+function mapSessionRow(row) {
+  return {
+    sessionId: safeText(row.SessionID || row.SessionId || row.ID),
+    userCode: safeText(row.UserCode || row.GebruikerCode),
+    userName: safeText(row.UserName || row.GebruikerNaam || row.Naam),
+    userRole: safeText(row.UserRole || row.Rol),
+    loginEmail: normalizeLoginEmail(row.LoginEmail || row.Email || ''),
+    authMode: safeText(row.AuthMode || row.Auth || 'code'),
+    active: row.Active === undefined ? isTrue(row.Actief) : isTrue(row.Active),
+    createdAt: safeText(row.CreatedAt || row.AangemaaktOp),
+    createdAtRaw: safeText(row.CreatedAtRaw || row.AangemaaktOpRaw || row.CreatedAt || row.AangemaaktOp),
+    expiresAt: safeText(row.ExpiresAt || row.VervaltOp),
+    expiresAtRaw: safeText(row.ExpiresAtRaw || row.VervaltOpRaw || row.ExpiresAt || row.VervaltOp),
+    invalidatedAt: safeText(row.InvalidatedAt || row.OngeldigOp),
+    invalidatedReason: safeText(row.InvalidatedReason || row.OngeldigReden),
+  };
 }
 
-function getActiveSessions() {
-  const now = new Date();
+function getAllSessions_() {
+  return readObjectsSafe(getSessionsTab_())
+    .map(mapSessionRow)
+    .sort(function (a, b) {
+      return (
+        safeText(b.createdAtRaw).localeCompare(safeText(a.createdAtRaw)) ||
+        safeText(b.sessionId).localeCompare(safeText(a.sessionId))
+      );
+    });
+}
 
-  return getAllSessions().filter(function (session) {
-    if (!session || !session.actief) return false;
+function getSessionById(sessionId) {
+  var id = safeText(sessionId);
+  if (!id) return null;
 
-    const expires = new Date(session.verlooptOp);
-    if (isNaN(expires.getTime())) return false;
+  return getAllSessions_().find(function (item) {
+    return safeText(item.sessionId) === id;
+  }) || null;
+}
 
-    return expires.getTime() > now.getTime();
-  });
+function isSessionActive_(session) {
+  if (!session) return false;
+  if (!isTrue(session.active)) return false;
+  if (isIsoDateTimeExpired_(session.expiresAtRaw)) return false;
+  return true;
+}
+
+function getActiveSessionById_(sessionId) {
+  var session = getSessionById(sessionId);
+  return isSessionActive_(session) ? session : null;
 }
 
 function getUserBySessionId(sessionId) {
-  const sid = safeText(sessionId);
-  if (!sid) return null;
-
-  const session = getActiveSessions().find(function (x) {
-    return x.sessionId === sid;
-  });
+  var session = getActiveSessionById_(sessionId);
   if (!session) return null;
 
-  const users = getAllUsers();
-  return users.find(function (x) {
-    return getEffectiveLoginEmail(x) === session.loginEmail;
-  }) || null;
+  return {
+    code: session.userCode,
+    naam: session.userName,
+    rol: session.userRole,
+    email: session.loginEmail,
+    authMode: session.authMode,
+    sessionId: session.sessionId,
+  };
 }
 
-function getCurrentUserRecord() {
-  const email = getCurrentSessionEmailSafe();
-  if (!email) return null;
+/* ---------------------------------------------------------
+   Create / invalidate
+   --------------------------------------------------------- */
 
-  return getAllUsers().find(function (user) {
-    return user.email === email;
-  }) || null;
+function buildSessionObject_(payload) {
+  payload = payload || {};
+
+  var createdAtRaw = getNowRaw_();
+  var expiresAtRaw = getExpiryRawFromNow_(getSessionHours_());
+
+  return {
+    SessionID: makeSessionId_(),
+    UserCode: safeText(payload.userCode),
+    UserName: safeText(payload.userName),
+    UserRole: safeText(payload.userRole),
+    LoginEmail: normalizeLoginEmail(payload.loginEmail),
+    AuthMode: safeText(payload.authMode || 'code'),
+    Active: true,
+    CreatedAt: toDisplayDateTime(createdAtRaw),
+    CreatedAtRaw: createdAtRaw,
+    ExpiresAt: toDisplayDateTime(expiresAtRaw),
+    ExpiresAtRaw: expiresAtRaw,
+    InvalidatedAt: '',
+    InvalidatedReason: '',
+  };
 }
 
-function getCurrentAdminUserRecord() {
-  const user = getCurrentUserRecord();
-  if (!user || !user.active) return null;
-  return user.rol === ROLE.ADMIN ? user : null;
-}
+function createSessionForUser(payload) {
+  payload = payload || {};
 
-function requireLoggedInUser(sessionId) {
-  const sessionUser = sessionId ? getUserBySessionId(sessionId) : null;
-  if (sessionUser) return sessionUser;
+  if (!safeText(payload.userCode)) throw new Error('UserCode is verplicht voor sessie.');
+  if (!safeText(payload.userRole)) throw new Error('UserRole is verplicht voor sessie.');
 
-  const adminUser = getCurrentAdminUserRecord();
-  if (adminUser) return adminUser;
-
-  throw new Error('Geen geldige sessie. Log opnieuw in.');
-}
-
-function createSessionForUser(user) {
   return withSessionLock_(function () {
-    const now = new Date();
-    const expires = new Date(now.getTime() + getSessionDurationHours() * 60 * 60 * 1000);
-    const sessionId = makeSessionId();
+    var obj = buildSessionObject_(payload);
+    appendObjects(getSessionsTab_(), [obj]);
+    return mapSessionRow(obj);
+  });
+}
 
-    appendObjects(TABS.SESSIONS, [{
-      SessionID: sessionId,
-      LoginEmail: getEffectiveLoginEmail(user),
-      Naam: safeText(user && user.naam),
-      Rol: safeText(user && user.rol),
-      TechniekerCode: safeText(user && user.techniekerCode),
-      AangemaaktOp: formatSessionDateTime_(now),
-      VerlooptOp: formatSessionDateTime_(expires),
-      Actief: 'Ja'
-    }]);
+function invalidateSessionById(sessionId, reason) {
+  var id = safeText(sessionId);
+  if (!id) throw new Error('SessionId ontbreekt.');
+
+  return withSessionLock_(function () {
+    var table = getAllValues(getSessionsTab_());
+    if (!table.length) {
+      return { invalidated: false, sessionId: id };
+    }
+
+    var headerRow = table[0];
+    var dataRows = table.slice(1);
+    var changed = false;
+    var nowRaw = getNowRaw_();
+
+    var newRows = dataRows.map(function (row) {
+      var obj = rowToObject(headerRow, row);
+      var mapped = mapSessionRow(obj);
+
+      if (safeText(mapped.sessionId) !== id) {
+        return row;
+      }
+
+      if (!isTrue(mapped.active)) {
+        return row;
+      }
+
+      obj.Active = false;
+      obj.InvalidatedAt = toDisplayDateTime(nowRaw);
+      obj.InvalidatedReason = safeText(reason || 'MANUAL');
+      changed = true;
+
+      return buildRowFromHeaders(headerRow, obj);
+    });
+
+    if (changed) {
+      writeFullTable(getSessionsTab_(), headerRow, newRows);
+    }
 
     return {
-      sessionId: sessionId,
-      aangemaaktOp: formatSessionDateTime_(now),
-      verlooptOp: formatSessionDateTime_(expires)
+      invalidated: changed,
+      sessionId: id,
     };
   });
 }
 
-function invalidateSessionById(sessionId) {
-  const sid = safeText(sessionId);
-  if (!sid) return false;
-
-  return withSessionLock_(function () {
-    const sheet = getSheetOrThrow(TABS.SESSIONS);
-    const values = sheet.getDataRange().getValues();
-    if (!values || !values.length) return false;
-
-    const headers = values[0].map(function (h) { return safeText(h); });
-    const col = getColMap(headers);
-
-    if (col['SessionID'] === undefined || col['Actief'] === undefined) return false;
-
-    for (let i = 1; i < values.length; i++) {
-      if (safeText(values[i][col['SessionID']]) !== sid) continue;
-
-      const activeCellValue = safeText(values[i][col['Actief']]);
-      if (activeCellValue === 'Nee') return true;
-
-      sheet.getRange(i + 1, col['Actief'] + 1).setValue('Nee');
-      return true;
-    }
-
-    return false;
-  });
-}
-
-function syncOpenSessionsToNewLoginEmail(oldLoginEmail, newLoginEmail) {
-  const oldValue = normalizeLoginEmail(oldLoginEmail);
-  const newValue = normalizeLoginEmail(newLoginEmail);
-
-  if (!oldValue || !newValue || oldValue === newValue) return;
-
-  withSessionLock_(function () {
-    const sheet = getSheetOrThrow(TABS.SESSIONS);
-    const values = sheet.getDataRange().getValues();
-    if (!values || !values.length) return;
-
-    const headers = values[0].map(function (h) { return safeText(h); });
-    const col = getColMap(headers);
-
-    if (col['LoginEmail'] === undefined || col['Actief'] === undefined) return;
-
-    for (let i = 1; i < values.length; i++) {
-      const isActive = isTrue(values[i][col['Actief']]);
-      if (!isActive) continue;
-
-      const rowLoginEmail = normalizeLoginEmail(values[i][col['LoginEmail']]);
-      if (rowLoginEmail !== oldValue) continue;
-
-      sheet.getRange(i + 1, col['LoginEmail'] + 1).setValue(newValue);
-    }
-  });
-}
+/* ---------------------------------------------------------
+   Cleanup / maintenance
+   --------------------------------------------------------- */
 
 function cleanupExpiredSessions() {
   return withSessionLock_(function () {
-    const sheet = getSheetOrThrow(TABS.SESSIONS);
-    const values = sheet.getDataRange().getValues();
-    if (!values || values.length < 2) return 0;
-
-    const headers = values[0].map(function (h) { return safeText(h); });
-    const col = getColMap(headers);
-
-    if (
-      col['SessionID'] === undefined ||
-      col['VerlooptOp'] === undefined ||
-      col['Actief'] === undefined
-    ) {
-      return 0;
+    var table = getAllValues(getSessionsTab_());
+    if (!table.length) {
+      return { updatedCount: 0 };
     }
 
-    const now = new Date();
-    let changed = 0;
+    var headerRow = table[0];
+    var dataRows = table.slice(1);
+    var updatedCount = 0;
+    var nowRaw = getNowRaw_();
 
-    for (let i = 1; i < values.length; i++) {
-      if (!isTrue(values[i][col['Actief']])) continue;
+    var newRows = dataRows.map(function (row) {
+      var obj = rowToObject(headerRow, row);
+      var mapped = mapSessionRow(obj);
 
-      const expires = new Date(values[i][col['VerlooptOp']]);
-      if (isNaN(expires.getTime())) continue;
-      if (expires.getTime() > now.getTime()) continue;
+      if (!isTrue(mapped.active)) {
+        return row;
+      }
+      if (!isIsoDateTimeExpired_(mapped.expiresAtRaw)) {
+        return row;
+      }
 
-      sheet.getRange(i + 1, col['Actief'] + 1).setValue('Nee');
-      changed++;
+      obj.Active = false;
+      obj.InvalidatedAt = toDisplayDateTime(nowRaw);
+      obj.InvalidatedReason = 'EXPIRED';
+      updatedCount += 1;
+
+      return buildRowFromHeaders(headerRow, obj);
+    });
+
+    if (updatedCount) {
+      writeFullTable(getSessionsTab_(), headerRow, newRows);
+
+      writeAudit({
+        actie: 'CLEANUP_EXPIRED_SESSIONS',
+        actor: { naam: 'System', rol: 'System', email: '' },
+        documentType: 'Sessies',
+        documentId: 'EXPIRED',
+        details: {
+          updatedCount: updatedCount,
+        },
+      });
     }
 
-    return changed;
+    return {
+      updatedCount: updatedCount,
+    };
   });
 }
 
-function buildAuthTemplateContext(user, sessionId) {
+function syncOpenSessionsToNewLoginEmail(userCode, newLoginEmail) {
+  var code = safeText(userCode);
+  var email = normalizeLoginEmail(newLoginEmail);
+
+  if (!code) throw new Error('UserCode ontbreekt.');
+  if (!email) throw new Error('Nieuwe login e-mail ontbreekt.');
+
+  return withSessionLock_(function () {
+    var table = getAllValues(getSessionsTab_());
+    if (!table.length) {
+      return { updatedCount: 0 };
+    }
+
+    var headerRow = table[0];
+    var dataRows = table.slice(1);
+    var updatedCount = 0;
+
+    var newRows = dataRows.map(function (row) {
+      var obj = rowToObject(headerRow, row);
+      var mapped = mapSessionRow(obj);
+
+      if (safeText(mapped.userCode) !== code) {
+        return row;
+      }
+      if (!isTrue(mapped.active)) {
+        return row;
+      }
+      if (isIsoDateTimeExpired_(mapped.expiresAtRaw)) {
+        return row;
+      }
+
+      obj.LoginEmail = email;
+      updatedCount += 1;
+      return buildRowFromHeaders(headerRow, obj);
+    });
+
+    if (updatedCount) {
+      writeFullTable(getSessionsTab_(), headerRow, newRows);
+    }
+
+    return {
+      updatedCount: updatedCount,
+      userCode: code,
+      loginEmail: email,
+    };
+  });
+}
+
+/* ---------------------------------------------------------
+   Google admin fallback
+   --------------------------------------------------------- */
+
+function resolveAdminGoogleUser_() {
+  if (typeof getCurrentAdminUserRecord !== 'function') {
+    return null;
+  }
+
+  var adminUser = getCurrentAdminUserRecord();
+  if (!adminUser) return null;
+
   return {
-    currentSessionId: safeText(sessionId),
-    currentUserName: safeText(user && user.naam),
-    currentUserRole: safeText(user && user.rol),
-    currentLoginEmail: getEffectiveLoginEmail(user),
-    currentAuthMode: getAuthModeForUser(user)
+    code: safeText(adminUser.code || adminUser.userCode || adminUser.Code),
+    naam: safeText(adminUser.naam || adminUser.userName || adminUser.Naam),
+    rol: safeText(adminUser.rol || adminUser.userRole || adminUser.Rol),
+    email: normalizeLoginEmail(adminUser.email || adminUser.loginEmail || adminUser.Email),
+    authMode: 'admin_google',
+    sessionId: '',
+  };
+}
+
+function resolveCustomSessionUser_(sessionId) {
+  var user = getUserBySessionId(sessionId);
+  if (!user) return null;
+
+  return {
+    code: safeText(user.code),
+    naam: safeText(user.naam),
+    rol: safeText(user.rol),
+    email: normalizeLoginEmail(user.email),
+    authMode: safeText(user.authMode || 'code'),
+    sessionId: safeText(user.sessionId),
+  };
+}
+
+/* ---------------------------------------------------------
+   Main auth context
+   --------------------------------------------------------- */
+
+function requireLoggedInUser(sessionId) {
+  cleanupExpiredSessions();
+
+  var sessionUser = resolveCustomSessionUser_(sessionId);
+  if (sessionUser) {
+    return sessionUser;
+  }
+
+  var adminUser = resolveAdminGoogleUser_();
+  if (adminUser) {
+    return adminUser;
+  }
+
+  throw new Error('Geen geldige login gevonden.');
+}
+
+function getSessionContext(payload) {
+  payload = payload || {};
+
+  var sessionId = safeText(payload.sessionId || payload.sid);
+  var sessionUser = resolveCustomSessionUser_(sessionId);
+  if (sessionUser) {
+    return {
+      authenticated: true,
+      user: sessionUser,
+      authMode: sessionUser.authMode,
+      sessionId: sessionUser.sessionId,
+    };
+  }
+
+  var adminUser = resolveAdminGoogleUser_();
+  if (adminUser) {
+    return {
+      authenticated: true,
+      user: adminUser,
+      authMode: adminUser.authMode,
+      sessionId: '',
+    };
+  }
+
+  return {
+    authenticated: false,
+    user: null,
+    authMode: '',
+    sessionId: '',
   };
 }

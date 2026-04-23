@@ -1,0 +1,778 @@
+/* =========================================================
+   _mobilewarehouse_js.html
+   Mobile warehouse client module
+   Pure JS partial: no <script> tags in this file.
+   ========================================================= */
+
+(function () {
+  'use strict';
+
+  var MOBILE_REFRESH_INTERVAL_MS = 60000;
+  var MOBILE_IDLE_THRESHOLD_MS = 15000;
+  var mobileRefreshTimer = null;
+  var mobileLoadInProgress = false;
+
+  window.APP_STATE = window.APP_STATE || {};
+  window.APP_STATE.mobileWarehouseData = window.APP_STATE.mobileWarehouseData || null;
+  window.APP_STATE.mobileActiveTab =
+    window.APP_STATE.mobileActiveTab || localStorage.getItem('mobile_active_tab') || 'overview';
+  window.APP_STATE.mobileTransferDraft = window.APP_STATE.mobileTransferDraft || [];
+
+  /* ---------------------------------------------------------
+     Context + payload
+     --------------------------------------------------------- */
+
+  function getSelectedMobileWarehouseCode() {
+    return safeTextClient(window.SELECTED_MOBILE_WAREHOUSE_CODE || '');
+  }
+
+  function withMobileWarehouseSession(payload) {
+    return Object.assign({}, withSession(payload || {}), {
+      mobileWarehouseCode: getSelectedMobileWarehouseCode(),
+    });
+  }
+
+  function updateSelectedMobileWarehouseCode(code) {
+    window.SELECTED_MOBILE_WAREHOUSE_CODE = safeTextClient(code);
+  }
+
+  /* ---------------------------------------------------------
+     Tabs
+     --------------------------------------------------------- */
+
+  function switchMobileTab(tabName) {
+    var nextTab = safeTextClient(tabName || 'overview') || 'overview';
+    window.APP_STATE.mobileActiveTab = nextTab;
+    localStorage.setItem('mobile_active_tab', nextTab);
+
+    var tabMap = {
+      overview: ['tabMobileOverview', 'tabMobileOverviewBtn'],
+      stock: ['tabMobileStock', 'tabMobileStockBtn'],
+      requests: ['tabMobileRequests', 'tabMobileRequestsBtn'],
+      transfers: ['tabMobileTransfers', 'tabMobileTransfersBtn'],
+      notifications: ['tabMobileNotifications', 'tabMobileNotificationsBtn'],
+    };
+
+    Object.keys(tabMap).forEach(function (key) {
+      var panel = document.getElementById(tabMap[key][0]);
+      var btn = document.getElementById(tabMap[key][1]);
+
+      if (panel) {
+        panel.classList.toggle('active', key === nextTab);
+      }
+      if (btn) {
+        btn.classList.toggle('active', key === nextTab);
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------
+     Formatting + DOM helpers
+     --------------------------------------------------------- */
+
+  function fmt(value) {
+    return safeTextClient(value || '');
+  }
+
+  function fmtNumber(value) {
+    return String(safeNumberClient(value, 0));
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function getValue(id) {
+    var el = document.getElementById(id);
+    return el ? safeTextClient(el.value) : '';
+  }
+
+  function setValue(id, value) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.value = value == null ? '' : value;
+    }
+  }
+
+  function renderEmpty(containerId, message) {
+    var el = document.getElementById(containerId);
+    if (!el) {
+      return;
+    }
+    el.innerHTML = '<div class="card muted">' + escapeHtml(message || 'Geen gegevens.') + '</div>';
+  }
+
+  function renderTable(containerId, headers, rowsHtml) {
+    var el = document.getElementById(containerId);
+    if (!el) {
+      return;
+    }
+
+    var headHtml = headers
+      .map(function (h) { return '<th>' + escapeHtml(h) + '</th>'; })
+      .join('');
+
+    el.innerHTML =
+      '<div class="card">' +
+        '<div class="table-wrap">' +
+          '<table>' +
+            '<thead><tr>' + headHtml + '</tr></thead>' +
+            '<tbody>' + rowsHtml + '</tbody>' +
+          '</table>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function renderStatCards(containerId, items) {
+    var el = document.getElementById(containerId);
+    if (!el) {
+      return;
+    }
+
+    var html = '<div class="stat-grid">';
+    items.forEach(function (item) {
+      html +=
+        '<div class="stat-card">' +
+          '<div class="label">' + escapeHtml(item.label) + '</div>' +
+          '<div class="value">' + escapeHtml(item.value) + '</div>' +
+        '</div>';
+    });
+    html += '</div>';
+
+    el.innerHTML = html;
+  }
+
+  /* ---------------------------------------------------------
+     Filtering helpers
+     --------------------------------------------------------- */
+
+  function includesQuery(values, query) {
+    var q = fmt(query).toLowerCase();
+    if (!q) {
+      return true;
+    }
+    return values.some(function (value) {
+      return fmt(value).toLowerCase().indexOf(q) >= 0;
+    });
+  }
+
+  function applyMobileStockFilters(rows) {
+    var search = getValue('mobileStockSearch');
+    var typeFilter = getValue('mobileStockTypeFilter');
+    var onlyPositive = getValue('mobileStockOnlyPositive');
+
+    return (rows || []).filter(function (row) {
+      if (!includesQuery([row.artikelCode, row.artikelOmschrijving], search)) {
+        return false;
+      }
+      if (typeFilter && fmt(row.typeMateriaal) !== typeFilter) {
+        return false;
+      }
+      if (onlyPositive === 'positive' && safeNumberClient(row.voorraadMobiel, 0) <= 0) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  function applyMobileRequestFilters(rows, kind) {
+    var search = getValue('mobileRequestSearch');
+    var statusFilter = getValue('mobileRequestStatusFilter');
+    var viewMode = getValue('mobileRequestViewMode') || 'all';
+
+    if (viewMode === 'open' && kind !== 'open') {
+      return [];
+    }
+    if (viewMode === 'history' && kind !== 'history') {
+      return [];
+    }
+
+    return (rows || []).filter(function (row) {
+      if (!includesQuery([row.aanvraagId, row.requestId, row.techniekerNaam, row.techniekerCode, row.reden], search)) {
+        return false;
+      }
+      if (statusFilter && fmt(row.status) !== statusFilter) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  function applyMobileNotificationFilters(rows) {
+    var search = getValue('mobileNotificationSearch');
+    var statusFilter = getValue('mobileNotificationStatusFilter');
+    var unreadFilter = getValue('mobileNotificationOnlyUnread');
+
+    return (rows || []).filter(function (row) {
+      if (!includesQuery([row.titel, row.type, row.bericht], search)) {
+        return false;
+      }
+      if (statusFilter && fmt(row.status) !== statusFilter) {
+        return false;
+      }
+      if (unreadFilter === 'unread' && fmt(row.status).toLowerCase() !== 'open') {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  /* ---------------------------------------------------------
+     Render: overview
+     --------------------------------------------------------- */
+
+  function renderMobileOverview(data) {
+    var summary = (data && data.summary) || {};
+    renderStatCards('mobileOverviewStats', [
+      { label: 'Artikels', value: fmtNumber(summary.artikels) },
+      { label: 'Totaal aantal', value: fmtNumber(summary.totaalAantal) },
+      { label: 'Grabbel', value: fmtNumber(summary.grabbelAantal) },
+      { label: 'Behoefte', value: fmtNumber(summary.behoefteAantal) },
+    ]);
+
+    var infoEl = document.getElementById('mobileOverviewInfo');
+    if (infoEl) {
+      var warehouse = (data && data.warehouse) || {};
+      var generatedAt = fmt(data && data.generatedAt);
+      infoEl.innerHTML =
+        '<div class="card">' +
+          '<div><strong>Mobiel magazijn:</strong> ' + escapeHtml(fmt(warehouse.naam || warehouse.code)) + '</div>' +
+          '<div class="muted" style="margin-top:8px;">Laatste opbouw: ' + escapeHtml(generatedAt || '-') + '</div>' +
+        '</div>';
+    }
+  }
+
+  /* ---------------------------------------------------------
+     Render: stock
+     --------------------------------------------------------- */
+
+  function renderMobileStock(data) {
+    var rows = applyMobileStockFilters((data && data.stockRows) || []);
+    if (!rows.length) {
+      renderEmpty('mobileStockTable', 'Geen stockgegevens beschikbaar.');
+      return;
+    }
+
+    var html = rows.map(function (row) {
+      return (
+        '<tr>' +
+          '<td>' + escapeHtml(fmt(row.artikelCode)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.artikelOmschrijving)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.typeMateriaal)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.eenheid)) + '</td>' +
+          '<td>' + escapeHtml(fmtNumber(row.voorraadMobiel)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.laatsteMutatie)) + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    renderTable(
+      'mobileStockTable',
+      ['Artikel', 'Omschrijving', 'Type', 'Eenheid', 'Voorraad', 'Laatste mutatie'],
+      html
+    );
+  }
+
+  /* ---------------------------------------------------------
+     Render: requests
+     --------------------------------------------------------- */
+
+  function renderMobileRequests(data) {
+    var queue = applyMobileRequestFilters((data && data.requestQueue) || [], 'open');
+    var history = applyMobileRequestFilters((data && data.requestHistory) || [], 'history');
+    var target = document.getElementById('mobileRequestsTable');
+    if (!target) {
+      return;
+    }
+
+    var html = '';
+
+    if (queue.length) {
+      html += '<div class="card"><h3 class="section-title">Openstaande aanvragen</h3><div class="table-wrap"><table><thead><tr>' +
+        '<th>ID</th><th>Datum</th><th>Technieker</th><th>Status</th><th>Reden</th>' +
+      '</tr></thead><tbody>' +
+      queue.map(function (row) {
+        return '<tr>' +
+          '<td>' + escapeHtml(fmt(row.aanvraagId || row.requestId)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.documentDatum || row.documentDatumIso)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.techniekerNaam || row.techniekerCode)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.status)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.reden)) + '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div></div>';
+    }
+
+    if (history.length) {
+      html += '<div class="card"><h3 class="section-title">Historiek</h3><div class="table-wrap"><table><thead><tr>' +
+        '<th>ID</th><th>Datum</th><th>Technieker</th><th>Status</th><th>Transfer</th>' +
+      '</tr></thead><tbody>' +
+      history.map(function (row) {
+        return '<tr>' +
+          '<td>' + escapeHtml(fmt(row.aanvraagId || row.requestId)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.documentDatum || row.documentDatumIso)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.techniekerNaam || row.techniekerCode)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.status)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.transferId || '-')) + '</td>' +
+        '</tr>';
+      }).join('') +
+      '</tbody></table></div></div>';
+    }
+
+    if (!html) {
+      html = '<div class="card muted">Geen aanvragen beschikbaar.</div>';
+    }
+
+    target.innerHTML = html;
+  }
+
+  /* ---------------------------------------------------------
+     Transfer draft logic
+     --------------------------------------------------------- */
+
+  function readMobileTransferDraftLineFromForm() {
+    return {
+      artikelCode: getValue('mobileTransferArticleCode'),
+      artikelOmschrijving: getValue('mobileTransferArticleDescription'),
+      eenheid: getValue('mobileTransferUnit') || 'Stuk',
+      aantal: safeNumberClient(getValue('mobileTransferQuantity'), 0),
+    };
+  }
+
+  function clearMobileTransferLineForm() {
+    setValue('mobileTransferArticleCode', '');
+    setValue('mobileTransferArticleDescription', '');
+    setValue('mobileTransferUnit', '');
+    setValue('mobileTransferQuantity', 1);
+  }
+
+  function validateMobileTransferDraftLine(line) {
+    if (!fmt(line.artikelCode)) {
+      throw new Error('Artikelcode is verplicht.');
+    }
+    if (safeNumberClient(line.aantal, 0) <= 0) {
+      throw new Error('Aantal moet groter zijn dan 0.');
+    }
+  }
+
+  function addMobileTransferDraftLine() {
+    try {
+      var line = readMobileTransferDraftLineFromForm();
+      validateMobileTransferDraftLine(line);
+
+      window.APP_STATE.mobileTransferDraft.push(line);
+      renderMobileTransferDraftTable();
+      clearMobileTransferLineForm();
+      showSuccess('Transferlijn toegevoegd.', { popup: false, banner: true });
+    } catch (err) {
+      showError(extractErrorMessage(err, 'Transferlijn kon niet toegevoegd worden.'), true);
+    }
+  }
+
+  function removeMobileTransferDraftLine(index) {
+    var idx = safeNumberClient(index, -1);
+    if (idx < 0 || idx >= window.APP_STATE.mobileTransferDraft.length) {
+      return;
+    }
+    window.APP_STATE.mobileTransferDraft.splice(idx, 1);
+    renderMobileTransferDraftTable();
+  }
+
+  function clearMobileTransferDraft() {
+    window.APP_STATE.mobileTransferDraft = [];
+    renderMobileTransferDraftTable();
+    showSuccess('Transferdraft leeggemaakt.', { popup: false, banner: true });
+  }
+
+  function renderMobileTransferDraftTable() {
+    var target = document.getElementById('mobileTransferDraftTable');
+    if (!target) {
+      return;
+    }
+
+    var rows = window.APP_STATE.mobileTransferDraft || [];
+    if (!rows.length) {
+      target.innerHTML = '<div class="card muted">Nog geen transferlijnen toegevoegd.</div>';
+      return;
+    }
+
+    var html =
+      '<div class="card">' +
+        '<h3 class="section-title">Draftlijnen</h3>' +
+        '<div class="table-wrap">' +
+          '<table>' +
+            '<thead><tr>' +
+              '<th>Artikel</th><th>Omschrijving</th><th>Eenheid</th><th>Aantal</th><th></th>' +
+            '</tr></thead><tbody>' +
+            rows.map(function (row, index) {
+              return (
+                '<tr>' +
+                  '<td>' + escapeHtml(fmt(row.artikelCode)) + '</td>' +
+                  '<td>' + escapeHtml(fmt(row.artikelOmschrijving)) + '</td>' +
+                  '<td>' + escapeHtml(fmt(row.eenheid)) + '</td>' +
+                  '<td>' + escapeHtml(fmtNumber(row.aantal)) + '</td>' +
+                  '<td><button type="button" class="secondary" onclick="removeMobileTransferDraftLine(' + index + ')">Verwijderen</button></td>' +
+                '</tr>'
+              );
+            }).join('') +
+            '</tbody>' +
+          '</table>' +
+        '</div>' +
+      '</div>';
+
+    target.innerHTML = html;
+  }
+
+  function buildMobileTransferSubmitPayload() {
+    var technicianCode = getValue('mobileTransferTechnician');
+    var documentDate = getValue('mobileTransferDate');
+    var reason = getValue('mobileTransferReason');
+    var remark = getValue('mobileTransferRemark');
+    var lines = (window.APP_STATE.mobileTransferDraft || []).map(function (line) {
+      return Object.assign({}, line);
+    });
+
+    if (!technicianCode) {
+      throw new Error('Kies eerst een technieker.');
+    }
+    if (!documentDate) {
+      throw new Error('Documentdatum is verplicht.');
+    }
+    if (!lines.length) {
+      throw new Error('Voeg eerst minstens één transferlijn toe.');
+    }
+
+    return withMobileWarehouseSession({
+      transferType: 'MOBILE_TO_BUS',
+      technicianCode: technicianCode,
+      documentDate: documentDate,
+      reason: reason,
+      remark: remark,
+      lines: lines,
+    });
+  }
+
+  async function submitMobileTransferDraft() {
+    var submitMethod = safeTextClient(window.MOBILE_TRANSFER_SUBMIT_METHOD || 'createDirectMobileToBusTransfer');
+
+    try {
+      var payload = buildMobileTransferSubmitPayload();
+
+      await runAction({
+        method: submitMethod,
+        payload: payload,
+        busyMessage: 'Transfer bewaren...',
+        fallbackErrorMessage: 'Transfer kon niet bewaard worden.',
+        onSuccess: function () {
+          window.APP_STATE.mobileTransferDraft = [];
+          renderMobileTransferDraftTable();
+          showSuccess('Transfer succesvol bewaard.');
+          loadMobileWarehouseData({ showBusyOverlay: false });
+        },
+      });
+    } catch (err) {
+      if (err && err.message) {
+        showError(err.message, true);
+      } else {
+        showError('Transfer kon niet bewaard worden.', true);
+      }
+    }
+  }
+
+  function renderMobileTransferHistory(data) {
+    var target = document.getElementById('mobileTransferHistoryTable');
+    if (!target) {
+      return;
+    }
+
+    var rows = (data && data.transferHistory) || (data && data.transfers) || [];
+    if (!rows.length) {
+      target.innerHTML = '<div class="muted">Geen transferhistoriek beschikbaar.</div>';
+      return;
+    }
+
+    var html =
+      '<div class="table-wrap">' +
+        '<table>' +
+          '<thead><tr>' +
+            '<th>ID</th><th>Datum</th><th>Van</th><th>Naar</th><th>Status</th>' +
+          '</tr></thead><tbody>' +
+          rows.map(function (row) {
+            return (
+              '<tr>' +
+                '<td>' + escapeHtml(fmt(row.transferId || row.id)) + '</td>' +
+                '<td>' + escapeHtml(fmt(row.documentDate || row.documentDatum || row.datum)) + '</td>' +
+                '<td>' + escapeHtml(fmt(row.fromLocation || row.vanLocatie)) + '</td>' +
+                '<td>' + escapeHtml(fmt(row.toLocation || row.naarLocatie)) + '</td>' +
+                '<td>' + escapeHtml(fmt(row.status)) + '</td>' +
+              '</tr>'
+            );
+          }).join('') +
+          '</tbody>' +
+        '</table>' +
+      '</div>';
+
+    target.innerHTML = html;
+  }
+
+  /* ---------------------------------------------------------
+     Render: transfers
+     --------------------------------------------------------- */
+
+  function renderMobileTransfers(data) {
+    var el = document.getElementById('mobileTransfersInfo');
+    if (!el) {
+      return;
+    }
+
+    var warehouse = (data && data.warehouse) || {};
+    var techs = (data && data.technicians) || [];
+    var options = techs.map(function (t) {
+      return '<option value="' + escapeHtml(fmt(t.code)) + '">' + escapeHtml(fmt(t.naam || t.code)) + '</option>';
+    }).join('');
+
+    el.innerHTML =
+      '<div class="card">' +
+        '<h3 class="section-title">Directe transfer naar bus</h3>' +
+        '<div class="grid two">' +
+          '<div>' +
+            '<label>Mobiel magazijn</label>' +
+            '<input id="mobileTransferWarehouse" value="' + escapeHtml(fmt(warehouse.naam || warehouse.code)) + '" disabled />' +
+          '</div>' +
+          '<div>' +
+            '<label>Technieker</label>' +
+            '<select id="mobileTransferTechnician">' +
+              '<option value="">Kies technieker</option>' +
+              options +
+            '</select>' +
+          '</div>' +
+          '<div>' +
+            '<label>Documentdatum</label>' +
+            '<input id="mobileTransferDate" type="date" />' +
+          '</div>' +
+          '<div>' +
+            '<label>Reden</label>' +
+            '<input id="mobileTransferReason" value="Aanvulling mobiel magazijn" />' +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-top:12px;">' +
+          '<label>Opmerking</label>' +
+          '<textarea id="mobileTransferRemark" placeholder="Optionele opmerking"></textarea>' +
+        '</div>' +
+      '</div>';
+
+    var dateEl = document.getElementById('mobileTransferDate');
+    if (dateEl && !dateEl.value) {
+      dateEl.value = toIsoTodayClient();
+    }
+
+    renderMobileTransferDraftTable();
+    renderMobileTransferHistory(data);
+  }
+
+  /* ---------------------------------------------------------
+     Render: notifications
+     --------------------------------------------------------- */
+
+  function renderMobileNotifications(data) {
+    var rows = applyMobileNotificationFilters((data && data.notifications) || []);
+    if (!rows.length) {
+      renderEmpty('mobileNotificationsTable', 'Geen meldingen beschikbaar.');
+      return;
+    }
+
+    var html = rows.map(function (row) {
+      return (
+        '<tr>' +
+          '<td>' + escapeHtml(fmt(row.aangemaaktOp || row.datum || '')) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.titel || row.type)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.bericht)) + '</td>' +
+          '<td>' + escapeHtml(fmt(row.status)) + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    renderTable(
+      'mobileNotificationsTable',
+      ['Datum', 'Titel', 'Bericht', 'Status'],
+      html
+    );
+  }
+
+  async function markAllMobileNotificationsRead() {
+    var method = safeTextClient(window.MOBILE_NOTIFICATIONS_MARK_ALL_METHOD || 'markAllNotificationsRead');
+
+    await runAction({
+      method: method,
+      payload: withMobileWarehouseSession({ recipientRole: 'MobielMagazijn' }),
+      busyMessage: 'Meldingen bijwerken...',
+      fallbackErrorMessage: 'Meldingen konden niet bijgewerkt worden.',
+      onSuccess: function () {
+        showSuccess('Meldingen bijgewerkt.');
+        loadMobileWarehouseData({ showBusyOverlay: false });
+      },
+    });
+  }
+
+  function renderMobileWarehouseData(data) {
+    renderMobileOverview(data);
+    renderMobileStock(data);
+    renderMobileRequests(data);
+    renderMobileTransfers(data);
+    renderMobileNotifications(data);
+  }
+
+  /* ---------------------------------------------------------
+     Loading
+     --------------------------------------------------------- */
+
+  async function loadMobileWarehouseData(options) {
+    var cfg = Object.assign(
+      {
+        showBusyOverlay: true,
+      },
+      options || {}
+    );
+
+    if (mobileLoadInProgress) {
+      return null;
+    }
+    if (!ensureSession()) {
+      return null;
+    }
+
+    mobileLoadInProgress = true;
+    clearError();
+
+    if (cfg.showBusyOverlay) {
+      showBusy('Mobiel magazijn laden...');
+    }
+
+    try {
+      var result = await serverCall('getMobileWarehouseDashboardData', withMobileWarehouseSession({}));
+      window.APP_STATE.mobileWarehouseData = result || null;
+
+      if (result && result.selectedMobileWarehouseCode) {
+        updateSelectedMobileWarehouseCode(result.selectedMobileWarehouseCode);
+      }
+
+      renderMobileWarehouseData(result || null);
+      switchMobileTab(window.APP_STATE.mobileActiveTab || 'overview');
+
+      if (cfg.showBusyOverlay) {
+        hideBusy();
+      }
+
+      return result;
+    } catch (err) {
+      if (cfg.showBusyOverlay) {
+        hideBusy();
+      }
+      showError(extractErrorMessage(err, 'Mobiel magazijn kon niet geladen worden.'), true);
+      throw err;
+    } finally {
+      mobileLoadInProgress = false;
+    }
+  }
+
+  /* ---------------------------------------------------------
+     Refresh
+     --------------------------------------------------------- */
+
+  function shouldRunMobileSilentRefresh() {
+    if (!hasPermission('silentAutoRefresh')) {
+      return false;
+    }
+    if (!isUserIdleFor(MOBILE_IDLE_THRESHOLD_MS)) {
+      return false;
+    }
+    if (document.hidden) {
+      return false;
+    }
+    return true;
+  }
+
+  async function runMobileSilentRefresh() {
+    if (!shouldRunMobileSilentRefresh()) {
+      return;
+    }
+
+    try {
+      await loadMobileWarehouseData({
+        showBusyOverlay: false,
+      });
+    } catch (err) {
+      console.warn('Stille mobile refresh mislukt:', err);
+    }
+  }
+
+  function startMobileRefreshTimer() {
+    stopMobileRefreshTimer();
+    mobileRefreshTimer = window.setInterval(runMobileSilentRefresh, MOBILE_REFRESH_INTERVAL_MS);
+  }
+
+  function stopMobileRefreshTimer() {
+    if (mobileRefreshTimer) {
+      window.clearInterval(mobileRefreshTimer);
+      mobileRefreshTimer = null;
+    }
+  }
+
+  /* ---------------------------------------------------------
+     Init
+     --------------------------------------------------------- */
+
+  async function initMobileWarehouseShell(options) {
+    var cfg = Object.assign(
+      {
+        defaultTab: window.APP_STATE.mobileActiveTab || 'overview',
+        autoRefresh: true,
+      },
+      options || {}
+    );
+
+    initDefaultDatesShared();
+    switchMobileTab(cfg.defaultTab);
+    renderMobileTransferDraftTable();
+
+    await loadMobileWarehouseData({
+      showBusyOverlay: true,
+    });
+
+    if (cfg.autoRefresh) {
+      startMobileRefreshTimer();
+    }
+  }
+
+  window.addEventListener('beforeunload', function () {
+    stopMobileRefreshTimer();
+  });
+
+  /* ---------------------------------------------------------
+     Exports
+     --------------------------------------------------------- */
+
+  window.getSelectedMobileWarehouseCode = getSelectedMobileWarehouseCode;
+  window.withMobileWarehouseSession = withMobileWarehouseSession;
+  window.updateSelectedMobileWarehouseCode = updateSelectedMobileWarehouseCode;
+  window.switchMobileTab = switchMobileTab;
+
+  window.addMobileTransferDraftLine = addMobileTransferDraftLine;
+  window.removeMobileTransferDraftLine = removeMobileTransferDraftLine;
+  window.clearMobileTransferDraft = clearMobileTransferDraft;
+  window.renderMobileTransferDraftTable = renderMobileTransferDraftTable;
+  window.submitMobileTransferDraft = submitMobileTransferDraft;
+  window.markAllMobileNotificationsRead = markAllMobileNotificationsRead;
+
+  window.renderMobileWarehouseData = renderMobileWarehouseData;
+  window.loadMobileWarehouseData = loadMobileWarehouseData;
+  window.runMobileSilentRefresh = runMobileSilentRefresh;
+  window.startMobileRefreshTimer = startMobileRefreshTimer;
+  window.stopMobileRefreshTimer = stopMobileRefreshTimer;
+  window.initMobileWarehouseShell = initMobileWarehouseShell;
+})();

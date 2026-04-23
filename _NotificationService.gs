@@ -1,14 +1,114 @@
 /* =========================================================
-   21_NotificationService.gs — meldingen / routing / gelezen
+   21_NotificationService.gs
+   Refactor: notification core service
+   Doel:
+   - één centrale notificatielaag
+   - generieke create/push helpers
+   - read models per gebruiker/rol
+   - markeren als gelezen / verwerkt
    ========================================================= */
 
-function makeNotificationId() {
-  return makeStampedId('N');
+/* ---------------------------------------------------------
+   Status / role fallbacks
+   --------------------------------------------------------- */
+
+function getNotificationStatusOpen_() {
+  if (typeof NOTIFICATION_STATUS !== 'undefined' && NOTIFICATION_STATUS && NOTIFICATION_STATUS.OPEN) {
+    return NOTIFICATION_STATUS.OPEN;
+  }
+  return 'Open';
 }
 
-function buildNotificationObject(payload) {
+function getNotificationStatusRead_() {
+  if (typeof NOTIFICATION_STATUS !== 'undefined' && NOTIFICATION_STATUS && NOTIFICATION_STATUS.READ) {
+    return NOTIFICATION_STATUS.READ;
+  }
+  return 'Gelezen';
+}
+
+function getNotificationStatusProcessed_() {
+  if (typeof NOTIFICATION_STATUS !== 'undefined' && NOTIFICATION_STATUS && NOTIFICATION_STATUS.PROCESSED) {
+    return NOTIFICATION_STATUS.PROCESSED;
+  }
+  return 'Verwerkt';
+}
+
+function getNotificationStatusClosed_() {
+  if (typeof NOTIFICATION_STATUS !== 'undefined' && NOTIFICATION_STATUS && NOTIFICATION_STATUS.CLOSED) {
+    return NOTIFICATION_STATUS.CLOSED;
+  }
+  return 'Gesloten';
+}
+
+function getNotificationRoleManager_() {
+  if (typeof NOTIFICATION_ROLE !== 'undefined' && NOTIFICATION_ROLE && NOTIFICATION_ROLE.MANAGER) {
+    return NOTIFICATION_ROLE.MANAGER;
+  }
+  return 'Manager';
+}
+
+function getNotificationRoleWarehouse_() {
+  if (typeof NOTIFICATION_ROLE !== 'undefined' && NOTIFICATION_ROLE && NOTIFICATION_ROLE.WAREHOUSE) {
+    return NOTIFICATION_ROLE.WAREHOUSE;
+  }
+  return 'Magazijn';
+}
+
+function getNotificationRoleMobileWarehouse_() {
+  if (typeof NOTIFICATION_ROLE !== 'undefined' && NOTIFICATION_ROLE && NOTIFICATION_ROLE.MOBILE_WAREHOUSE) {
+    return NOTIFICATION_ROLE.MOBILE_WAREHOUSE;
+  }
+  return 'MobielMagazijn';
+}
+
+function getNotificationRoleTechnician_() {
+  if (typeof NOTIFICATION_ROLE !== 'undefined' && NOTIFICATION_ROLE && NOTIFICATION_ROLE.TECHNICIAN) {
+    return NOTIFICATION_ROLE.TECHNICIAN;
+  }
+  return 'Technieker';
+}
+
+/* ---------------------------------------------------------
+   IDs / mapping
+   --------------------------------------------------------- */
+
+function makeNotificationId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'NTF-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+function mapNotification(row) {
   return {
-    NotificatieID: makeNotificationId(),
+    notificationId: safeText(row.NotificationID || row.NotificationId || row.ID),
+    rol: safeText(row.Rol),
+    ontvangerCode: safeText(row.OntvangerCode),
+    ontvangerNaam: safeText(row.OntvangerNaam),
+    type: safeText(row.Type),
+    titel: safeText(row.Titel),
+    bericht: safeText(row.Bericht),
+    bronType: safeText(row.BronType),
+    bronId: safeText(row.BronID || row.BronId),
+    status: safeText(row.Status),
+    aangemaaktOp: safeText(row.AangemaaktOp),
+    aangemaaktOpRaw: safeText(row.AangemaaktOpRaw || row.AangemaaktOp),
+    gelezenOp: safeText(row.GelezenOp),
+    verwerktOp: safeText(row.VerwerktOp),
+    geslotenOp: safeText(row.GeslotenOp),
+    extraJson: safeText(row.ExtraJson || row.ExtraJSON),
+  };
+}
+
+/* ---------------------------------------------------------
+   Builders
+   --------------------------------------------------------- */
+
+function buildNotificationObject(payload) {
+  payload = payload || {};
+
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  return {
+    NotificationID: makeNotificationId_(),
     Rol: safeText(payload.rol),
     OntvangerCode: safeText(payload.ontvangerCode),
     OntvangerNaam: safeText(payload.ontvangerNaam),
@@ -17,321 +117,482 @@ function buildNotificationObject(payload) {
     Bericht: safeText(payload.bericht),
     BronType: safeText(payload.bronType),
     BronID: safeText(payload.bronId),
-    Status: NOTIFICATION_STATUS.OPEN,
-    AangemaaktOp: nowStamp(),
-    GelezenOp: ''
+    Status: getNotificationStatusOpen_(),
+    AangemaaktOp: toDisplayDateTime(nowRaw),
+    AangemaaktOpRaw: nowRaw,
+    GelezenOp: '',
+    VerwerktOp: '',
+    GeslotenOp: '',
+    ExtraJson: safeJson(payload.extra || {}),
   };
 }
 
-function getAllNotifications() {
-  return readObjectsSafe(TABS.NOTIFICATIONS)
-    .map(mapNotification)
-    .sort((a, b) => String(b.aangemaaktOpRaw || '').localeCompare(String(a.aangemaaktOpRaw || '')));
-}
+/* ---------------------------------------------------------
+   Create / push
+   --------------------------------------------------------- */
 
 function hasOpenNotification(payload) {
-  const rol = safeText(payload.rol);
-  const ontvangerCode = safeText(payload.ontvangerCode);
-  const type = safeText(payload.type);
-  const bronType = safeText(payload.bronType);
-  const bronId = safeText(payload.bronId);
+  payload = payload || {};
 
-  return getAllNotifications().some(item =>
-    item.status === NOTIFICATION_STATUS.OPEN &&
-    safeText(item.rol) === rol &&
-    safeText(item.ontvangerCode) === ontvangerCode &&
-    safeText(item.type) === type &&
-    safeText(item.bronType) === bronType &&
-    safeText(item.bronId) === bronId
-  );
+  var rol = safeText(payload.rol);
+  var ontvangerCode = safeText(payload.ontvangerCode);
+  var type = safeText(payload.type);
+  var bronType = safeText(payload.bronType);
+  var bronId = safeText(payload.bronId);
+
+  return readObjectsSafe(TABS.NOTIFICATIONS)
+    .map(mapNotification)
+    .some(function (item) {
+      return safeText(item.rol) === rol &&
+        safeText(item.ontvangerCode) === ontvangerCode &&
+        safeText(item.type) === type &&
+        safeText(item.bronType) === bronType &&
+        safeText(item.bronId) === bronId &&
+        safeText(item.status) === getNotificationStatusOpen_();
+    });
 }
 
 function pushNotification(payload) {
-  if (!payload) throw new Error('Geen notificatiepayload ontvangen.');
+  payload = payload || {};
 
-  if (hasOpenNotification(payload)) {
-    return { success: true, skipped: true };
+  if (!safeText(payload.rol)) throw new Error('Rol is verplicht voor notificatie.');
+  if (!safeText(payload.type)) throw new Error('Type is verplicht voor notificatie.');
+  if (!safeText(payload.titel)) throw new Error('Titel is verplicht voor notificatie.');
+  if (!safeText(payload.bericht)) throw new Error('Bericht is verplicht voor notificatie.');
+
+  if (isTrue(payload.skipIfOpenExists) !== false) {
+    if (hasOpenNotification(payload)) {
+      return {
+        created: false,
+        duplicateOpenNotification: true,
+      };
+    }
   }
 
-  appendObjects(TABS.NOTIFICATIONS, [buildNotificationObject(payload)]);
+  var obj = buildNotificationObject(payload);
+  appendObjects(TABS.NOTIFICATIONS, [obj]);
 
-  writeAudit(
-    'Notificatie aangemaakt',
-    'Systeem',
-    'NotificatieService',
-    'Notificatie',
-    payload.bronId || '',
-    {
-      rol: payload.rol,
-      ontvangerCode: payload.ontvangerCode,
-      type: payload.type,
-      bronType: payload.bronType,
-      bronId: payload.bronId
-    }
-  );
-
-  return { success: true, skipped: false };
+  return {
+    created: true,
+    notification: mapNotification(obj),
+  };
 }
 
-function pushManagerNotification(type, title, message, bronType, bronId) {
+function pushManagerNotification(type, title, message, bronType, bronId, ontvangerCode) {
   return pushNotification({
-    rol: NOTIFICATION_ROLE.MANAGER,
-    ontvangerCode: 'MANAGER',
+    rol: getNotificationRoleManager_(),
+    ontvangerCode: safeText(ontvangerCode) || 'MANAGER',
     ontvangerNaam: 'Manager',
     type: type,
     titel: title,
     bericht: message,
     bronType: bronType,
-    bronId: bronId
+    bronId: bronId,
   });
 }
 
-function pushWarehouseNotification(type, title, message, bronType, bronId) {
+function pushWarehouseNotification(type, title, message, bronType, bronId, ontvangerCode) {
   return pushNotification({
-    rol: NOTIFICATION_ROLE.WAREHOUSE,
-    ontvangerCode: 'MAGAZIJN',
+    rol: getNotificationRoleWarehouse_(),
+    ontvangerCode: safeText(ontvangerCode) || 'WAREHOUSE',
     ontvangerNaam: 'Magazijn',
     type: type,
     titel: title,
     bericht: message,
     bronType: bronType,
-    bronId: bronId
+    bronId: bronId,
   });
 }
 
-function pushMobileWarehouseNotification(type, title, message, bronType, bronId) {
+function pushMobileWarehouseNotification(type, title, message, bronType, bronId, ontvangerCode) {
   return pushNotification({
-    rol: NOTIFICATION_ROLE.MOBILE_WAREHOUSE,
-    ontvangerCode: 'MOBIEL_MAGAZIJN',
+    rol: getNotificationRoleMobileWarehouse_(),
+    ontvangerCode: safeText(ontvangerCode) || 'MOBIEL',
     ontvangerNaam: 'Mobiel magazijn',
     type: type,
     titel: title,
     bericht: message,
     bronType: bronType,
-    bronId: bronId
+    bronId: bronId,
   });
 }
 
-function pushTechnicianNotification(techniekerCode, techniekerNaam, type, title, message, bronType, bronId) {
+function pushTechnicianNotification(type, title, message, bronType, bronId, ontvangerCode, ontvangerNaam) {
   return pushNotification({
-    rol: NOTIFICATION_ROLE.TECHNICIAN,
-    ontvangerCode: safeText(techniekerCode),
-    ontvangerNaam: safeText(techniekerNaam || getTechnicianNameByCode(techniekerCode)),
+    rol: getNotificationRoleTechnician_(),
+    ontvangerCode: safeText(ontvangerCode),
+    ontvangerNaam: safeText(ontvangerNaam) || safeText(ontvangerCode),
     type: type,
     titel: title,
     bericht: message,
     bronType: bronType,
-    bronId: bronId
+    bronId: bronId,
   });
 }
 
-function getNotificationsForManager() {
-  return getAllNotifications().filter(item => item.rol === NOTIFICATION_ROLE.MANAGER);
-}
+/* ---------------------------------------------------------
+   Read layer
+   --------------------------------------------------------- */
 
-function getNotificationsForWarehouse() {
-  return getAllNotifications().filter(item => item.rol === NOTIFICATION_ROLE.WAREHOUSE);
-}
-
-function getNotificationsForMobileWarehouse() {
-  return getAllNotifications().filter(item => item.rol === NOTIFICATION_ROLE.MOBILE_WAREHOUSE);
-}
-
-function getNotificationsForTechnician(techRef) {
-  const technicians = readObjectsSafe(TABS.TECHNICIANS).map(mapTechnician);
-  const technician = findTechnicianByRef(technicians, techRef);
-
-  if (!technician || !technician.active) {
-    throw new Error('Technieker niet gevonden of niet actief.');
-  }
-
-  return getAllNotifications().filter(item =>
-    item.rol === NOTIFICATION_ROLE.TECHNICIAN &&
-    normalizeRef(item.ontvangerCode) === normalizeRef(technician.code)
-  );
-}
-
-function assertNotificationOwnership(notification, sessionId) {
-  const user = requireLoggedInUser(sessionId);
-  if (user.rol === ROLE.ADMIN) return user;
-
-  if (notification.rol === NOTIFICATION_ROLE.MANAGER) {
-    if (!roleAllowed(user, [ROLE.MANAGER, ROLE.ANALYSIS])) {
-      throw new Error('Geen rechten voor deze melding.');
-    }
-    return user;
-  }
-
-  if (notification.rol === NOTIFICATION_ROLE.WAREHOUSE) {
-    if (!roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MANAGER])) {
-      throw new Error('Geen rechten voor deze melding.');
-    }
-    return user;
-  }
-
-  if (notification.rol === NOTIFICATION_ROLE.MOBILE_WAREHOUSE) {
-    if (!roleAllowed(user, [ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER])) {
-      throw new Error('Geen rechten voor deze melding.');
-    }
-    return user;
-  }
-
-  if (notification.rol === NOTIFICATION_ROLE.TECHNICIAN) {
-    if (!roleAllowed(user, [ROLE.TECHNICIAN])) {
-      throw new Error('Geen rechten voor deze melding.');
-    }
-
-    if (normalizeRef(user.techniekerCode) !== normalizeRef(notification.ontvangerCode)) {
-      throw new Error('Je kan enkel je eigen meldingen aanpassen.');
-    }
-
-    return user;
-  }
-
-  throw new Error('Geen rechten voor deze melding.');
-}
-
-function markNotificationRead(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-
-  const sessionId = getPayloadSessionId(payload);
-  const notificatieId = safeText(payload.notificatieId);
-
-  if (!notificatieId) {
-    throw new Error('NotificatieID ontbreekt.');
-  }
-
-  const sheet = getSheetOrThrow(TABS.NOTIFICATIONS);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) throw new Error('Tab Notificaties is leeg.');
-
-  const headers = values[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  let updated = false;
-  let currentNotification = null;
-  let actor = null;
-
-  for (let i = 1; i < values.length; i++) {
-    if (safeText(values[i][col['NotificatieID']]) !== notificatieId) continue;
-
-    currentNotification = mapNotification({
-      NotificatieID: values[i][col['NotificatieID']],
-      Rol: values[i][col['Rol']],
-      OntvangerCode: values[i][col['OntvangerCode']],
-      OntvangerNaam: values[i][col['OntvangerNaam']],
-      Type: values[i][col['Type']],
-      Titel: values[i][col['Titel']],
-      Bericht: values[i][col['Bericht']],
-      BronType: values[i][col['BronType']],
-      BronID: values[i][col['BronID']],
-      Status: values[i][col['Status']],
-      AangemaaktOp: values[i][col['AangemaaktOp']],
-      GelezenOp: values[i][col['GelezenOp']]
+function getAllNotifications() {
+  return readObjectsSafe(TABS.NOTIFICATIONS)
+    .map(mapNotification)
+    .sort(function (a, b) {
+      return (
+        safeText(b.aangemaaktOpRaw).localeCompare(safeText(a.aangemaaktOpRaw)) ||
+        safeText(b.notificationId).localeCompare(safeText(a.notificationId))
+      );
     });
+}
 
-    actor = assertNotificationOwnership(currentNotification, sessionId);
+function getNotificationById(notificationId) {
+  var id = safeText(notificationId);
+  if (!id) return null;
+  return getAllNotifications().find(function (item) {
+    return safeText(item.notificationId) === id;
+  }) || null;
+}
 
-    values[i][col['Status']] = NOTIFICATION_STATUS.READ;
-    values[i][col['GelezenOp']] = nowStamp();
-    updated = true;
-    break;
+function resolveNotificationContextForActor_(actor) {
+  if (roleAllowed(actor, [ROLE.MANAGER])) {
+    return {
+      allowedRole: getNotificationRoleManager_(),
+      recipientCode: 'MANAGER',
+      actorType: 'manager',
+    };
   }
 
-  if (!updated) {
-    throw new Error('Notificatie niet gevonden.');
+  if (roleAllowed(actor, [ROLE.WAREHOUSE])) {
+    return {
+      allowedRole: getNotificationRoleWarehouse_(),
+      recipientCode: 'WAREHOUSE',
+      actorType: 'warehouse',
+    };
   }
 
-  if (values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
+  if (roleAllowed(actor, [ROLE.MOBILE_WAREHOUSE])) {
+    return {
+      allowedRole: getNotificationRoleMobileWarehouse_(),
+      recipientCode: safeText(actor.mobileWarehouseCode) || 'MOBIEL',
+      actorType: 'mobilewarehouse',
+    };
   }
 
-  writeAudit(
-    'Notificatie gelezen',
-    actor ? actor.rol : '',
-    actor ? (actor.naam || actor.email || actor.techniekerCode) : '',
-    'Notificatie',
-    notificatieId,
-    {
-      bronType: currentNotification ? currentNotification.bronType : '',
-      bronId: currentNotification ? currentNotification.bronId : ''
-    }
-  );
+  if (roleAllowed(actor, [ROLE.TECHNICIAN])) {
+    return {
+      allowedRole: getNotificationRoleTechnician_(),
+      recipientCode: safeText(actor.code || actor.techniekerCode || actor.technicianCode),
+      actorType: 'technician',
+    };
+  }
 
   return {
-    success: true,
-    message: 'Notificatie gemarkeerd als gelezen.'
+    allowedRole: '',
+    recipientCode: '',
+    actorType: '',
   };
 }
 
-function markNotificationsReadBySource(filters) {
-  filters = filters || {};
-
-  const sheet = getSheetOrThrow(TABS.NOTIFICATIONS);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) return { success: true, updated: 0 };
-
-  const headers = values[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  let updated = 0;
-
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-
-    const rol = safeText(row[col['Rol']]);
-    const ontvangerCode = safeText(row[col['OntvangerCode']]);
-    const type = safeText(row[col['Type']]);
-    const bronType = safeText(row[col['BronType']]);
-    const bronId = safeText(row[col['BronID']]);
-    const status = safeText(row[col['Status']]);
-
-    if (filters.rol && rol !== safeText(filters.rol)) continue;
-    if (filters.ontvangerCode && ontvangerCode !== safeText(filters.ontvangerCode)) continue;
-    if (filters.type && type !== safeText(filters.type)) continue;
-    if (filters.bronType && bronType !== safeText(filters.bronType)) continue;
-    if (filters.bronId && bronId !== safeText(filters.bronId)) continue;
-    if (status !== NOTIFICATION_STATUS.OPEN) continue;
-
-    values[i][col['Status']] = NOTIFICATION_STATUS.READ;
-    values[i][col['GelezenOp']] = nowStamp();
-    updated++;
+function filterNotificationsForActor_(rows, actor) {
+  if (roleAllowed(actor, [ROLE.ADMIN])) {
+    return rows;
   }
 
-  if (updated && values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
+  var ctx = resolveNotificationContextForActor_(actor);
+  if (!ctx.allowedRole) return [];
+
+  return rows.filter(function (item) {
+    if (safeText(item.rol) !== safeText(ctx.allowedRole)) {
+      return false;
+    }
+
+    if (ctx.actorType === 'manager' || ctx.actorType === 'warehouse') {
+      return true;
+    }
+
+    if (ctx.actorType === 'mobilewarehouse') {
+      return !ctx.recipientCode ||
+        safeText(item.ontvangerCode) === ctx.recipientCode ||
+        safeText(item.ontvangerCode) === 'MOBIEL';
+    }
+
+    if (ctx.actorType === 'technician') {
+      return safeText(item.ontvangerCode) === safeText(ctx.recipientCode);
+    }
+
+    return false;
+  });
+}
+
+function getNotificationsData(payload) {
+  payload = payload || {};
+  var sessionId = getPayloadSessionId(payload);
+  var actor = requireLoggedInUser(sessionId);
+
+  var rows = filterNotificationsForActor_(getAllNotifications(), actor);
+
+  return {
+    items: rows,
+    summary: {
+      totaal: rows.length,
+      open: rows.filter(function (x) { return safeText(x.status) === getNotificationStatusOpen_(); }).length,
+      gelezen: rows.filter(function (x) { return safeText(x.status) === getNotificationStatusRead_(); }).length,
+      verwerkt: rows.filter(function (x) { return safeText(x.status) === getNotificationStatusProcessed_(); }).length,
+      gesloten: rows.filter(function (x) { return safeText(x.status) === getNotificationStatusClosed_(); }).length,
+    }
+  };
+}
+
+function getUnreadNotificationCountForActor(actor) {
+  return filterNotificationsForActor_(getAllNotifications(), actor)
+    .filter(function (item) {
+      return safeText(item.status) === getNotificationStatusOpen_();
+    })
+    .length;
+}
+
+/* ---------------------------------------------------------
+   Access / ownership
+   --------------------------------------------------------- */
+
+function assertNotificationOwnership(actor, notification) {
+  if (!notification) {
+    throw new Error('Notificatie niet gevonden.');
   }
 
-  return { success: true, updated: updated };
+  if (roleAllowed(actor, [ROLE.ADMIN])) {
+    return true;
+  }
+
+  var ctx = resolveNotificationContextForActor_(actor);
+  if (!ctx.allowedRole) {
+    throw new Error('Geen rechten voor notificaties.');
+  }
+
+  if (safeText(notification.rol) !== safeText(ctx.allowedRole)) {
+    throw new Error('Geen toegang tot deze notificatie.');
+  }
+
+  if (ctx.actorType === 'manager' || ctx.actorType === 'warehouse') {
+    return true;
+  }
+
+  if (ctx.actorType === 'mobilewarehouse') {
+    if (
+      !ctx.recipientCode ||
+      safeText(notification.ontvangerCode) === ctx.recipientCode ||
+      safeText(notification.ontvangerCode) === 'MOBIEL'
+    ) {
+      return true;
+    }
+  }
+
+  if (ctx.actorType === 'technician') {
+    if (safeText(notification.ontvangerCode) === safeText(ctx.recipientCode)) {
+      return true;
+    }
+  }
+
+  throw new Error('Geen toegang tot deze notificatie.');
 }
 
-function markManagerNotificationsBySource(bronType, bronId) {
-  return markNotificationsReadBySource({
-    rol: NOTIFICATION_ROLE.MANAGER,
-    bronType: bronType,
-    bronId: bronId
+/* ---------------------------------------------------------
+   Row update helpers
+   --------------------------------------------------------- */
+
+function updateNotificationsByPredicate_(predicate, mutator) {
+  var table = getAllValues(TABS.NOTIFICATIONS);
+  if (!table.length) {
+    return { updatedCount: 0 };
+  }
+
+  var headerRow = table[0];
+  var dataRows = table.slice(1);
+  var updatedCount = 0;
+
+  var newRows = dataRows.map(function (row) {
+    var obj = rowToObject(headerRow, row);
+    var mapped = mapNotification(obj);
+
+    if (!predicate(mapped, obj)) {
+      return row;
+    }
+
+    mutator(obj, mapped);
+    updatedCount += 1;
+    return buildRowFromHeaders(headerRow, obj);
   });
+
+  if (updatedCount) {
+    writeFullTable(TABS.NOTIFICATIONS, headerRow, newRows);
+  }
+
+  return { updatedCount: updatedCount };
 }
 
-function markWarehouseNotificationsBySource(bronType, bronId) {
-  return markNotificationsReadBySource({
-    rol: NOTIFICATION_ROLE.WAREHOUSE,
-    bronType: bronType,
-    bronId: bronId
+/* ---------------------------------------------------------
+   Markeren
+   --------------------------------------------------------- */
+
+function markNotificationRead(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = requireLoggedInUser(sessionId);
+  var notificationId = safeText(payload.notificationId);
+  if (!notificationId) throw new Error('NotificationId ontbreekt.');
+
+  var notification = getNotificationById(notificationId);
+  assertNotificationOwnership(actor, notification);
+
+  var result = updateNotificationsByPredicate_(
+    function (mapped) {
+      return safeText(mapped.notificationId) === notificationId &&
+        safeText(mapped.status) === getNotificationStatusOpen_();
+    },
+    function (obj) {
+      obj.Status = getNotificationStatusRead_();
+      obj.GelezenOp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+    }
+  );
+
+  if (result.updatedCount) {
+    writeAudit({
+      actie: 'MARK_NOTIFICATION_READ',
+      actor: actor,
+      documentType: 'Notificatie',
+      documentId: notificationId,
+      details: {},
+    });
+  }
+
+  return {
+    updatedCount: result.updatedCount,
+    notificationId: notificationId,
+  };
+}
+
+function markAllNotificationsRead(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = requireLoggedInUser(sessionId);
+  var rows = filterNotificationsForActor_(getAllNotifications(), actor);
+  var allowedIds = {};
+  rows.forEach(function (item) {
+    allowedIds[item.notificationId] = true;
   });
+
+  var result = updateNotificationsByPredicate_(
+    function (mapped) {
+      return allowedIds[safeText(mapped.notificationId)] &&
+        safeText(mapped.status) === getNotificationStatusOpen_();
+    },
+    function (obj) {
+      obj.Status = getNotificationStatusRead_();
+      obj.GelezenOp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+    }
+  );
+
+  if (result.updatedCount) {
+    writeAudit({
+      actie: 'MARK_ALL_NOTIFICATIONS_READ',
+      actor: actor,
+      documentType: 'Notificaties',
+      documentId: 'ALL',
+      details: {
+        updatedCount: result.updatedCount,
+      },
+    });
+  }
+
+  return {
+    updatedCount: result.updatedCount,
+  };
 }
 
-function markMobileWarehouseNotificationsBySource(bronType, bronId) {
-  return markNotificationsReadBySource({
-    rol: NOTIFICATION_ROLE.MOBILE_WAREHOUSE,
+function markNotificationsProcessedBySource(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = requireLoggedInUser(sessionId);
+  var bronType = safeText(payload.bronType);
+  var bronId = safeText(payload.bronId);
+
+  if (!bronType || !bronId) {
+    throw new Error('BronType en BronId zijn verplicht.');
+  }
+
+  var result = updateNotificationsByPredicate_(
+    function (mapped) {
+      return safeText(mapped.bronType) === bronType &&
+        safeText(mapped.bronId) === bronId &&
+        [getNotificationStatusOpen_(), getNotificationStatusRead_()].indexOf(safeText(mapped.status)) >= 0;
+    },
+    function (obj) {
+      obj.Status = getNotificationStatusProcessed_();
+      obj.VerwerktOp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+    }
+  );
+
+  if (result.updatedCount) {
+    writeAudit({
+      actie: 'PROCESS_NOTIFICATIONS_BY_SOURCE',
+      actor: actor,
+      documentType: 'Notificaties',
+      documentId: bronType + ':' + bronId,
+      details: {
+        updatedCount: result.updatedCount,
+      },
+    });
+  }
+
+  return {
+    updatedCount: result.updatedCount,
     bronType: bronType,
-    bronId: bronId
-  });
+    bronId: bronId,
+  };
 }
 
-function getUnreadNotificationCountForRole(notificationRole) {
-  return getAllNotifications().filter(item =>
-    item.rol === notificationRole &&
-    item.status === NOTIFICATION_STATUS.OPEN
-  ).length;
+function closeNotificationsBySource(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = requireLoggedInUser(sessionId);
+  var bronType = safeText(payload.bronType);
+  var bronId = safeText(payload.bronId);
+
+  if (!bronType || !bronId) {
+    throw new Error('BronType en BronId zijn verplicht.');
+  }
+
+  var result = updateNotificationsByPredicate_(
+    function (mapped) {
+      return safeText(mapped.bronType) === bronType &&
+        safeText(mapped.bronId) === bronId &&
+        safeText(mapped.status) !== getNotificationStatusClosed_();
+    },
+    function (obj) {
+      obj.Status = getNotificationStatusClosed_();
+      obj.GeslotenOp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+    }
+  );
+
+  if (result.updatedCount) {
+    writeAudit({
+      actie: 'CLOSE_NOTIFICATIONS_BY_SOURCE',
+      actor: actor,
+      documentType: 'Notificaties',
+      documentId: bronType + ':' + bronId,
+      details: {
+        updatedCount: result.updatedCount,
+      },
+    });
+  }
+
+  return {
+    updatedCount: result.updatedCount,
+    bronType: bronType,
+    bronId: bronId,
+  };
 }

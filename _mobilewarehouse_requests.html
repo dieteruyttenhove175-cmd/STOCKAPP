@@ -1,0 +1,71 @@
+<!-- _mobilewarehouse_requests.html
+     Mobile warehouse requests partial
+-->
+<div class="card">
+  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+    <div>
+      <h3 class="section-title" style="margin-bottom: 4px;">Aanvragen</h3>
+      <div class="muted">
+        Openstaande aanvragen van techniekers en historiek van afgewerkte aanvragen.
+      </div>
+    </div>
+
+    <div class="row">
+      <button type="button" class="secondary" onclick="loadMobileWarehouseData({ showBusyOverlay: true })">
+        Vernieuwen
+      </button>
+      <button type="button" class="secondary" onclick="switchMobileTab('transfers')">
+        Naar transfers
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="grid three">
+    <div>
+      <label for="mobileRequestSearch">Zoeken</label>
+      <input
+        id="mobileRequestSearch"
+        type="text"
+        placeholder="Aanvraag-ID, technieker of reden"
+        oninput="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      />
+    </div>
+
+    <div>
+      <label for="mobileRequestStatusFilter">Status</label>
+      <select
+        id="mobileRequestStatusFilter"
+        onchange="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      >
+        <option value="">Alle statussen</option>
+        <option value="Open">Open</option>
+        <option value="In behandeling">In behandeling</option>
+        <option value="Goedgekeurd">Goedgekeurd</option>
+        <option value="Geweigerd">Geweigerd</option>
+        <option value="Geboekt">Geboekt</option>
+        <option value="Gesloten">Gesloten</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="mobileRequestViewMode">Weergave</label>
+      <select
+        id="mobileRequestViewMode"
+        onchange="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      >
+        <option value="all">Openstaand + historiek</option>
+        <option value="open">Enkel openstaand</option>
+        <option value="history">Enkel historiek</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="muted" style="margin-top: 12px;">
+    Deze tab wordt de vaste werkplek voor de aanvraagflow van techniekers naar het mobiel magazijn.
+    Goedkeuring en omzetting naar transfers blijven in aparte backendservices.
+  </div>
+</div>
+
+<div id="mobileRequestsTable"></div>

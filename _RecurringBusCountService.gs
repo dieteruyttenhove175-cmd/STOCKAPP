@@ -1,457 +1,537 @@
 /* =========================================================
-   51_RecurringBusCountService.gs — recurrente bustellingen
+   51_RecurringBusCountService.gs
+   Refactor: recurring bus count service
+   Doel:
+   - recurrente bustellingen sturen vanuit risicoscores
+   - open suggesties / open requests / historiek
+   - draft-aanmaak van gerichte bustellingen per technieker
    ========================================================= */
+
+/* ---------------------------------------------------------
+   Tabs / fallbacks
+   --------------------------------------------------------- */
+
+function getRecurringBusCountTab_() {
+  return TABS.RECURRING_BUS_COUNTS || 'RecurrenteBusTellingen';
+}
+
+function getRecurringBusCountStatusOpen_() {
+  if (typeof RECURRING_BUS_COUNT_STATUS !== 'undefined' && RECURRING_BUS_COUNT_STATUS && RECURRING_BUS_COUNT_STATUS.OPEN) {
+    return RECURRING_BUS_COUNT_STATUS.OPEN;
+  }
+  return 'Open';
+}
+
+function getRecurringBusCountStatusCreated_() {
+  if (typeof RECURRING_BUS_COUNT_STATUS !== 'undefined' && RECURRING_BUS_COUNT_STATUS && RECURRING_BUS_COUNT_STATUS.CREATED) {
+    return RECURRING_BUS_COUNT_STATUS.CREATED;
+  }
+  return 'Aangemaakt';
+}
+
+function getRecurringBusCountStatusClosed_() {
+  if (typeof RECURRING_BUS_COUNT_STATUS !== 'undefined' && RECURRING_BUS_COUNT_STATUS && RECURRING_BUS_COUNT_STATUS.CLOSED) {
+    return RECURRING_BUS_COUNT_STATUS.CLOSED;
+  }
+  return 'Gesloten';
+}
+
+function makeRecurringBusCountId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'RBC-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+/* ---------------------------------------------------------
+   Mapping
+   --------------------------------------------------------- */
+
+function mapRecurringBusCount(row) {
+  return {
+    recurringBusCountId: safeText(row.RecurringBusCountID || row.RecurringBusCountId || row.ID),
+    techniekerCode: safeText(row.TechniekerCode || row.TechnicianCode || row.TechCode),
+    techniekerNaam: safeText(row.TechniekerNaam || row.TechnicianName),
+    score: safeNumber(row.Score, 0),
+    sourceType: safeText(row.SourceType || 'RISK_SCORE'),
+    linkedBusCountId: safeText(row.LinkedBusCountID || row.LinkedBusCountId),
+    status: safeText(row.Status || getRecurringBusCountStatusOpen_()),
+    reason: safeText(row.Reason || row.Reden),
+    articleCodesCsv: safeText(row.ArticleCodesCsv || row.ArtikelCodesCsv),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    actor: safeText(row.Actor),
+    aangemaaktOp: safeText(row.AangemaaktOp),
+    aangemaaktOpRaw: safeText(row.AangemaaktOpRaw || row.AangemaaktOp),
+    geslotenOp: safeText(row.GeslotenOp),
+    opmerking: safeText(row.Opmerking),
+  };
+}
+
+/* ---------------------------------------------------------
+   Read layer
+   --------------------------------------------------------- */
+
+function getAllRecurringBusCountRequests() {
+  return readObjectsSafe(getRecurringBusCountTab_())
+    .map(mapRecurringBusCount)
+    .sort(function (a, b) {
+      return (
+        safeText(b.documentDatumIso).localeCompare(safeText(a.documentDatumIso)) ||
+        safeText(b.aangemaaktOpRaw).localeCompare(safeText(a.aangemaaktOpRaw)) ||
+        safeText(b.recurringBusCountId).localeCompare(safeText(a.recurringBusCountId))
+      );
+    });
+}
+
+function getRecurringBusCountById(recurringBusCountId) {
+  var id = safeText(recurringBusCountId);
+  if (!id) return null;
+
+  return getAllRecurringBusCountRequests().find(function (item) {
+    return safeText(item.recurringBusCountId) === id;
+  }) || null;
+}
+
+function getOpenRecurringBusCountRequests() {
+  return getAllRecurringBusCountRequests().filter(function (item) {
+    return [
+      getRecurringBusCountStatusOpen_(),
+      getRecurringBusCountStatusCreated_()
+    ].indexOf(safeText(item.status)) >= 0;
+  });
+}
+
+function getRecurringBusCountRequestsByTechnician(techniekerCode) {
+  var code = safeText(techniekerCode);
+  return getAllRecurringBusCountRequests().filter(function (item) {
+    return safeText(item.techniekerCode) === code;
+  });
+}
 
 /* ---------------------------------------------------------
    Helpers
    --------------------------------------------------------- */
 
-function parseScopeArtikelCodes(scopeArtikelCodes) {
-  return safeText(scopeArtikelCodes)
+function parseRecurringArticleCodesCsv_(csv) {
+  return safeText(csv)
     .split(',')
-    .map(x => safeText(x))
+    .map(function (item) { return safeText(item); })
     .filter(Boolean);
 }
 
-function isBusCountOpenLikeStatus(status) {
-  const value = safeText(status);
-  return value === BUS_COUNT_STATUS.OPEN || value === BUS_COUNT_STATUS.SUBMITTED;
+function buildRecurringArticleCodesCsv_(codes) {
+  var seen = {};
+  return (Array.isArray(codes) ? codes : [])
+    .map(function (item) { return safeText(item); })
+    .filter(function (item) {
+      if (!item) return false;
+      if (seen[item]) return false;
+      seen[item] = true;
+      return true;
+    })
+    .join(',');
 }
 
-function getOpenLikeBusCounts() {
-  return readObjectsSafe(TABS.BUS_COUNTS)
-    .map(mapBusCount)
-    .filter(count => isBusCountOpenLikeStatus(count.status));
+function resolveTechnicianNameForRecurring_(techniekerCode) {
+  var code = safeText(techniekerCode);
+  if (!code) return '';
+
+  if (typeof resolveTechnicianByRef === 'function') {
+    var tech = resolveTechnicianByRef(code);
+    return tech ? safeText(tech.naam) : code;
+  }
+
+  return code;
 }
 
-function getApprovedBusCounts() {
-  return readObjectsSafe(TABS.BUS_COUNTS)
-    .map(mapBusCount)
-    .filter(count => safeText(count.status) === BUS_COUNT_STATUS.APPROVED);
-}
+function hasOpenRecurringRequestForTechnician_(techniekerCode) {
+  var code = safeText(techniekerCode);
 
-function getLastApprovedBusCountForTechnician(techniekerCode) {
-  const code = normalizeRef(techniekerCode);
-
-  const rows = getApprovedBusCounts()
-    .filter(count => normalizeRef(count.techniekerCode) === code)
-    .sort((a, b) =>
-      `${safeText(b.documentDatumIso)} ${safeText(b.tellingId)}`.localeCompare(
-        `${safeText(a.documentDatumIso)} ${safeText(a.tellingId)}`
-      )
-    );
-
-  return rows.length ? rows[0] : null;
-}
-
-function hasOpenFullBusCountForTechnician(techniekerCode) {
-  const code = normalizeRef(techniekerCode);
-
-  return getOpenLikeBusCounts().some(count =>
-    normalizeRef(count.techniekerCode) === code &&
-    safeText(count.scopeType || 'Volledig') === 'Volledig'
-  );
-}
-
-function hasOpenTargetedBusCountForTechnicianArticle(techniekerCode, artikelCode) {
-  const techCode = normalizeRef(techniekerCode);
-  const articleCode = safeText(artikelCode);
-
-  return getOpenLikeBusCounts().some(count => {
-    if (normalizeRef(count.techniekerCode) !== techCode) return false;
-
-    const scopeType = safeText(count.scopeType || 'Volledig');
-    if (scopeType === 'Volledig') return true;
-
-    const codes = parseScopeArtikelCodes(count.scopeArtikelCodes);
-    return codes.includes(articleCode);
+  return getOpenRecurringBusCountRequests().some(function (item) {
+    return safeText(item.techniekerCode) === code;
   });
 }
 
-function hasOpenAnyBusCountForTechnician(techniekerCode) {
-  const code = normalizeRef(techniekerCode);
+function hasOpenBusCountForTechnician_(techniekerCode) {
+  var code = safeText(techniekerCode);
 
-  return getOpenLikeBusCounts().some(count =>
-    normalizeRef(count.techniekerCode) === code
-  );
+  if (typeof getBusCountsWithLines !== 'function') {
+    return false;
+  }
+
+  return getBusCountsWithLines().some(function (item) {
+    return safeText(item.techniekerCode) === code &&
+      [getBusCountStatusOpen_(), getBusCountStatusSubmitted_()].indexOf(safeText(item.status)) >= 0;
+  });
 }
 
-function buildBusCountSuggestionKey(type, techniekerCode, articleCode) {
-  return [
-    safeText(type),
-    normalizeRef(techniekerCode),
-    safeText(articleCode)
-  ].join('|');
-}
+function getRecurringBusCountSuggestedArticleCodes_(techniekerCode) {
+  var code = safeText(techniekerCode);
+  if (!code) return [];
 
-function daysSinceIsoDate(isoDate) {
-  const iso = safeText(isoDate);
-  if (!iso) return null;
+  if (typeof getStockRiskSignals !== 'function') {
+    return [];
+  }
 
-  const start = new Date(iso + 'T00:00:00');
-  if (isNaN(start)) return null;
-
-  const now = new Date();
-  return daysBetweenDates(start, now);
+  var seen = {};
+  return getStockRiskSignals()
+    .filter(function (signal) {
+      return safeText(signal.techniekerCode) === code &&
+        safeText(signal.signalType) === 'BUSCOUNT_DELTA';
+    })
+    .sort(function (a, b) {
+      return safeText(b.rawDate).localeCompare(safeText(a.rawDate));
+    })
+    .map(function (signal) {
+      return safeText(signal.artikelCode);
+    })
+    .filter(function (artikelCode) {
+      if (!artikelCode) return false;
+      if (seen[artikelCode]) return false;
+      seen[artikelCode] = true;
+      return true;
+    })
+    .slice(0, 25);
 }
 
 /* ---------------------------------------------------------
-   Suggesties opbouwen
+   Suggestion builder from risk scores
    --------------------------------------------------------- */
 
-function buildPeriodicBusCountSuggestions() {
-  const rules = getStockScoreRules();
-  const technicians = getActiveTechnicians();
-  const suggestions = [];
-
-  technicians.forEach(technician => {
-    const hasOpen = hasOpenFullBusCountForTechnician(technician.code);
-    if (hasOpen) return;
-
-    const lastApproved = getLastApprovedBusCountForTechnician(technician.code);
-    const daysSinceLast = lastApproved ? daysSinceIsoDate(lastApproved.documentDatumIso) : null;
-
-    const due =
-      !lastApproved ||
-      daysSinceLast === null ||
-      daysSinceLast >= Number(rules.periodic_bus_count_days || 60);
-
-    if (!due) return;
-
-    suggestions.push({
-      suggestionType: 'PERIODIC_FULL',
-      techniekerCode: technician.code,
-      techniekerNaam: technician.naam,
-      scopeType: 'Volledig',
-      requestedArticles: [],
-      riskScore: 0,
-      signalCount: 0,
-      reason: !lastApproved
-        ? 'Eerste periodieke bustelling'
-        : `Periodieke bustelling (${daysSinceLast} dagen sinds laatste goedgekeurde telling)`,
-      sourceRefs: lastApproved ? [lastApproved.tellingId] : []
-    });
-  });
-
-  return suggestions;
-}
-
-function buildRecurringTechnicianBusCountSuggestions() {
-  const rules = getStockScoreRules();
-  const technicianAlerts = typeof buildRecurringBusCountAlerts === 'function'
-    ? buildRecurringBusCountAlerts()
-    : [];
-
-  return technicianAlerts
-    .filter(alert => !hasOpenFullBusCountForTechnician(alert.techniekerCode))
-    .map(alert => ({
-      suggestionType: 'RECURRING_FULL',
-      techniekerCode: alert.techniekerCode,
-      techniekerNaam: alert.techniekerNaam,
-      scopeType: 'Volledig',
-      requestedArticles: [],
-      riskScore: Number(alert.riskScore || 0),
-      signalCount: Number(alert.signalCount || 0),
-      reason: `Recurrente bustelling wegens verhoogd risicoprofiel (${alert.signalCount} signalen, score ${alert.riskScore})`,
-      sourceRefs: alert.refs || []
-    }));
-}
-
-function buildTargetedArticleBusCountSuggestions() {
-  const rules = getStockScoreRules();
-  const articleAlerts = typeof buildDeltaCountAlerts === 'function'
-    ? buildDeltaCountAlerts()
-    : [];
-
-  const suggestions = [];
-  const seen = {};
-
-  articleAlerts.forEach(alert => {
-    const affectedTechnicians = Array.isArray(alert.affectedTechnicians)
-      ? alert.affectedTechnicians
+function buildRecurringBusCountCandidates() {
+  var suggestions =
+    typeof buildRecurringBusCountSuggestions === 'function'
+      ? buildRecurringBusCountSuggestions()
       : [];
 
-    affectedTechnicians.forEach(techniekerCode => {
-      if (!safeText(techniekerCode)) return;
-
-      if (hasOpenTargetedBusCountForTechnicianArticle(techniekerCode, alert.artikelCode)) {
-        return;
-      }
-
-      const key = buildBusCountSuggestionKey('TARGETED_ARTICLE', techniekerCode, alert.artikelCode);
-      if (seen[key]) return;
-      seen[key] = true;
-
-      suggestions.push({
-        suggestionType: 'TARGETED_ARTICLE',
+  return suggestions
+    .map(function (item) {
+      var techniekerCode = safeText(item.techniekerCode);
+      return {
         techniekerCode: techniekerCode,
-        techniekerNaam: getTechnicianNameByCode(techniekerCode),
-        scopeType: 'Gericht',
-        requestedArticles: [alert.artikelCode],
-        riskScore: Number(alert.riskScore || 0),
-        signalCount: Number(alert.signalCount || 0),
-        reason: `Gerichte telling voor artikel ${alert.artikelCode} wegens verhoogde risicoscore (${alert.signalCount} signalen, score ${alert.riskScore})`,
-        sourceRefs: alert.refs || [],
-        artikelCode: alert.artikelCode,
-        artikelOmschrijving: alert.artikelOmschrijving
-      });
-    });
-  });
-
-  return suggestions;
-}
-
-function buildGroupedTargetedBusCountSuggestions() {
-  const maxArticles = Number(getStockScoreRuleValue('targeted_bus_count_max_articles', 5));
-  const targeted = buildTargetedArticleBusCountSuggestions();
-
-  const grouped = {};
-
-  targeted.forEach(item => {
-    const techCode = safeText(item.techniekerCode);
-    if (!techCode) return;
-
-    if (!grouped[techCode]) {
-      grouped[techCode] = {
-        suggestionType: 'TARGETED_MULTI',
-        techniekerCode: item.techniekerCode,
-        techniekerNaam: item.techniekerNaam,
-        scopeType: 'Gericht',
-        requestedArticles: [],
-        riskScore: 0,
-        signalCount: 0,
-        reason: 'Gerichte bustelling op risicovolle artikels',
-        sourceRefs: []
+        techniekerNaam: safeText(item.techniekerNaam || resolveTechnicianNameForRecurring_(techniekerCode)),
+        score: safeNumber(item.score, 0),
+        reason: safeText(item.reason),
+        articleCodes: getRecurringBusCountSuggestedArticleCodes_(techniekerCode),
+        hasOpenRecurringRequest: hasOpenRecurringRequestForTechnician_(techniekerCode),
+        hasOpenBusCount: hasOpenBusCountForTechnician_(techniekerCode),
       };
-    }
-
-    if (grouped[techCode].requestedArticles.length < maxArticles) {
-      uniquePush(grouped[techCode].requestedArticles, item.artikelCode, maxArticles);
-    }
-
-    grouped[techCode].riskScore += Number(item.riskScore || 0);
-    grouped[techCode].signalCount += Number(item.signalCount || 0);
-
-    (item.sourceRefs || []).forEach(ref => uniquePush(grouped[techCode].sourceRefs, ref, 25));
-  });
-
-  return Object.keys(grouped)
-    .map(key => grouped[key])
-    .filter(item => item.requestedArticles.length > 0)
-    .sort((a, b) =>
-      Number(b.riskScore || 0) - Number(a.riskScore || 0) ||
-      safeText(a.techniekerNaam).localeCompare(safeText(b.techniekerNaam))
-    );
-}
-
-function buildBusCountSuggestions() {
-  const suggestions = []
-    .concat(buildPeriodicBusCountSuggestions())
-    .concat(buildRecurringTechnicianBusCountSuggestions());
-
-  const groupedTargeted = buildGroupedTargetedBusCountSuggestions();
-
-  const map = {};
-  suggestions.forEach(item => {
-    const key = buildBusCountSuggestionKey(item.suggestionType, item.techniekerCode, '');
-    if (!map[key]) map[key] = item;
-  });
-
-  groupedTargeted.forEach(item => {
-    const fullExists = Object.values(map).some(existing =>
-      normalizeRef(existing.techniekerCode) === normalizeRef(item.techniekerCode) &&
-      existing.scopeType === 'Volledig'
-    );
-
-    if (!fullExists) {
-      const key = buildBusCountSuggestionKey(item.suggestionType, item.techniekerCode, '');
-      if (!map[key]) map[key] = item;
-    }
-  });
-
-  return Object.keys(map)
-    .map(key => map[key])
-    .sort((a, b) =>
-      safeText(a.techniekerNaam).localeCompare(safeText(b.techniekerNaam)) ||
-      Number(b.riskScore || 0) - Number(a.riskScore || 0)
-    );
-}
-
-/* ---------------------------------------------------------
-   Suggestiedata ophalen
-   --------------------------------------------------------- */
-
-function getRecurringBusCountData(sessionId) {
-  const user = requireLoggedInUser(sessionId);
-
-  if (!roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MANAGER])) {
-    throw new Error('Geen rechten om bustellingssuggesties te bekijken.');
-  }
-
-  return {
-    suggestions: buildBusCountSuggestions(),
-    recurringTechnicianAlerts: typeof buildRecurringBusCountAlerts === 'function'
-      ? buildRecurringBusCountAlerts()
-      : [],
-    articleAlerts: typeof buildDeltaCountAlerts === 'function'
-      ? buildDeltaCountAlerts()
-      : [],
-    openBusCounts: getOpenLikeBusCounts()
-  };
-}
-
-/* ---------------------------------------------------------
-   Aanmaken vanuit suggestie
-   --------------------------------------------------------- */
-
-function createBusCountFromSuggestion(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-
-  const sessionId = getPayloadSessionId(payload);
-  const user = requireLoggedInUser(sessionId);
-
-  if (!roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MANAGER])) {
-    throw new Error('Geen rechten om bustelling vanuit suggestie aan te maken.');
-  }
-
-  const suggestionType = safeText(payload.suggestionType);
-  const techniekerCode = safeText(payload.techniekerCode);
-  const documentDatum = safeText(payload.documentDatum);
-  const actor = safeText(payload.actor || user.naam || user.email || 'Magazijn');
-  const requestedArticles = Array.isArray(payload.requestedArticles) ? payload.requestedArticles : [];
-  const reason = safeText(payload.reason);
-
-  if (!techniekerCode) throw new Error('TechniekerCode ontbreekt.');
-  if (!documentDatum) throw new Error('Documentdatum ontbreekt.');
-
-  if (requestedArticles.length) {
-    const uniqueCodes = [...new Set(requestedArticles.map(x => safeText(x)).filter(Boolean))];
-
-    return createBusCountRequest({
-      sessionId: sessionId,
-      techniekerCode: techniekerCode,
-      documentDatum: documentDatum,
-      actor: actor,
-      reden: reason || `Bustelling (${suggestionType})`,
-      requestedArticles: uniqueCodes
+    })
+    .sort(function (a, b) {
+      return (
+        safeNumber(b.score, 0) - safeNumber(a.score, 0) ||
+        safeText(a.techniekerNaam).localeCompare(safeText(b.techniekerNaam))
+      );
     });
-  }
+}
 
-  return createBusCountRequest({
-    sessionId: sessionId,
-    techniekerCode: techniekerCode,
-    documentDatum: documentDatum,
-    actor: actor,
-    reden: reason || `Bustelling (${suggestionType})`,
-    requestedArticles: []
+function getPendingRecurringBusCountCandidates() {
+  return buildRecurringBusCountCandidates().filter(function (item) {
+    return !item.hasOpenRecurringRequest && !item.hasOpenBusCount;
   });
 }
 
 /* ---------------------------------------------------------
-   Bulk create alle missende suggesties
+   Access policy
    --------------------------------------------------------- */
 
-function createAllMissingBusCountSuggestions(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+function assertRecurringBusCountReadAccess_(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.WAREHOUSE, ROLE.MANAGER],
+    'Geen rechten voor recurrente bustellingen.'
+  );
+  return user;
+}
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = requireLoggedInUser(sessionId);
+function assertRecurringBusCountWriteAccess_(sessionId) {
+  return assertRecurringBusCountReadAccess_(sessionId);
+}
 
-  if (!roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MANAGER])) {
-    throw new Error('Geen rechten om bustellingssuggesties aan te maken.');
+/* ---------------------------------------------------------
+   Create / close recurring requests
+   --------------------------------------------------------- */
+
+function createRecurringBusCountRequest(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertRecurringBusCountWriteAccess_(sessionId);
+
+  var techniekerCode = safeText(payload.techniekerCode || payload.technicianCode || payload.techCode);
+  if (!techniekerCode) {
+    throw new Error('TechniekerCode ontbreekt.');
   }
 
-  const documentDatum = safeText(payload.documentDatum);
-  const actor = safeText(payload.actor || user.naam || user.email || 'Magazijn');
-
-  if (!documentDatum) throw new Error('Documentdatum ontbreekt.');
-
-  const suggestions = buildBusCountSuggestions();
-  if (!suggestions.length) {
-    return {
-      success: true,
-      created: 0,
-      skipped: 0,
-      createdIds: [],
-      message: 'Geen nieuwe bustellingssuggesties om aan te maken.'
-    };
+  if (hasOpenRecurringRequestForTechnician_(techniekerCode)) {
+    throw new Error('Er bestaat al een open recurrente bustelling voor deze technieker.');
   }
 
-  const createdIds = [];
-  let skipped = 0;
+  var score = safeNumber(payload.score, 0);
+  var reason = safeText(payload.reason || payload.reden || 'Recurrente bustelling');
+  var articleCodes = Array.isArray(payload.articleCodes) ? payload.articleCodes : getRecurringBusCountSuggestedArticleCodes_(techniekerCode);
+  var documentDatum = safeText(payload.documentDatum || payload.documentDate || Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd'));
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
 
-  suggestions.forEach(suggestion => {
-    try {
-      const result = createBusCountFromSuggestion({
-        sessionId: sessionId,
-        suggestionType: suggestion.suggestionType,
-        techniekerCode: suggestion.techniekerCode,
-        documentDatum: documentDatum,
-        actor: actor,
-        requestedArticles: suggestion.requestedArticles || [],
-        reason: suggestion.reason
-      });
+  var obj = {
+    RecurringBusCountID: makeRecurringBusCountId_(),
+    TechniekerCode: techniekerCode,
+    TechniekerNaam: safeText(payload.techniekerNaam || resolveTechnicianNameForRecurring_(techniekerCode)),
+    Score: score,
+    SourceType: safeText(payload.sourceType || 'RISK_SCORE'),
+    LinkedBusCountID: '',
+    Status: getRecurringBusCountStatusOpen_(),
+    Reason: reason,
+    ArticleCodesCsv: buildRecurringArticleCodesCsv_(articleCodes),
+    DocumentDatum: documentDatum,
+    DocumentDatumIso: documentDatum,
+    Actor: safeText(payload.actor || actor.naam || actor.email),
+    AangemaaktOp: toDisplayDateTime(nowRaw),
+    AangemaaktOpRaw: nowRaw,
+    GeslotenOp: '',
+    Opmerking: safeText(payload.opmerking || payload.remark),
+  };
 
-      if (result && result.tellingId) {
-        createdIds.push(result.tellingId);
-      } else {
-        skipped++;
-      }
-    } catch (e) {
-      skipped++;
-    }
+  appendObjects(getRecurringBusCountTab_(), [obj]);
+
+  writeAudit({
+    actie: 'CREATE_RECURRING_BUS_COUNT_REQUEST',
+    actor: actor,
+    documentType: 'RecurrenteBusTelling',
+    documentId: obj.RecurringBusCountID,
+    details: {
+      techniekerCode: techniekerCode,
+      score: score,
+      articleCodeCount: parseRecurringArticleCodesCsv_(obj.ArticleCodesCsv).length,
+    },
   });
 
-  writeAudit(
-    'Bustellingssuggesties bulk aangemaakt',
-    user.rol,
-    actor,
-    'BusstocktellingSuggesties',
-    createdIds.join(', '),
-    {
-      created: createdIds.length,
-      skipped: skipped
+  if (typeof pushTechnicianNotification === 'function') {
+    pushTechnicianNotification(
+      'BusTelling',
+      'Recurrente bustelling gevraagd',
+      'Er werd een recurrente bustelling voor jouw bus gevraagd.',
+      'RecurrenteBusTelling',
+      obj.RecurringBusCountID,
+      techniekerCode,
+      obj.TechniekerNaam
+    );
+  }
+
+  return mapRecurringBusCount(obj);
+}
+
+function closeRecurringBusCountRequest(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertRecurringBusCountWriteAccess_(sessionId);
+  var recurringBusCountId = safeText(payload.recurringBusCountId);
+  if (!recurringBusCountId) throw new Error('RecurringBusCountId ontbreekt.');
+
+  var request = getRecurringBusCountById(recurringBusCountId);
+  if (!request) throw new Error('Recurrente bustelling niet gevonden.');
+
+  var table = getAllValues(getRecurringBusCountTab_());
+  if (!table.length) throw new Error('Recurrente bustellingtab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var rows = readObjectsSafe(getRecurringBusCountTab_()).map(function (row) {
+    var current = mapRecurringBusCount(row);
+    if (safeText(current.recurringBusCountId) !== recurringBusCountId) {
+      return row;
     }
+
+    row.Status = getRecurringBusCountStatusClosed_();
+    row.GeslotenOp = toDisplayDateTime(nowRaw);
+    if (payload.linkedBusCountId) {
+      row.LinkedBusCountID = safeText(payload.linkedBusCountId);
+    }
+    return row;
+  });
+
+  writeFullTable(
+    getRecurringBusCountTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
   );
 
+  writeAudit({
+    actie: 'CLOSE_RECURRING_BUS_COUNT_REQUEST',
+    actor: actor,
+    documentType: 'RecurrenteBusTelling',
+    documentId: recurringBusCountId,
+    details: {
+      linkedBusCountId: safeText(payload.linkedBusCountId),
+    },
+  });
+
+  return getRecurringBusCountById(recurringBusCountId);
+}
+
+/* ---------------------------------------------------------
+   Create actual bus count from recurring request
+   --------------------------------------------------------- */
+
+function createBusCountFromRecurringRequest(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertRecurringBusCountWriteAccess_(sessionId);
+  var recurringBusCountId = safeText(payload.recurringBusCountId);
+  if (!recurringBusCountId) throw new Error('RecurringBusCountId ontbreekt.');
+
+  var request = getRecurringBusCountById(recurringBusCountId);
+  if (!request) throw new Error('Recurrente bustelling niet gevonden.');
+
+  if (safeText(request.status) !== getRecurringBusCountStatusOpen_()) {
+    throw new Error('Recurrente bustelling staat niet in open status.');
+  }
+
+  if (typeof createBusCountDraftFromSnapshot !== 'function') {
+    throw new Error('BusCount service ontbreekt. Werk eerst het buscountblok in.');
+  }
+
+  var articleCodes = parseRecurringArticleCodesCsv_(request.articleCodesCsv);
+  var busCount = createBusCountDraftFromSnapshot({
+    sessionId: sessionId,
+    techniekerCode: request.techniekerCode,
+    techniekerNaam: request.techniekerNaam,
+    scopeType: articleCodes.length ? getBusCountScopeTargeted_() : getBusCountScopeFull_(),
+    requestedBy: safeText(actor.naam || actor.email),
+    reason: safeText(request.reason || 'Recurrente bustelling'),
+    documentDatum: safeText(payload.documentDatum || payload.documentDate || request.documentDatum),
+    opmerking: safeText(payload.opmerking || payload.remark || request.opmerking),
+    actor: safeText(actor.naam || actor.email),
+    articleCodes: articleCodes,
+  });
+
+  var requestTable = getAllValues(getRecurringBusCountTab_());
+  if (!requestTable.length) throw new Error('Recurrente bustellingtab is leeg of ongeldig.');
+
+  var requestHeaderRow = requestTable[0];
+  var updatedRequestRows = readObjectsSafe(getRecurringBusCountTab_()).map(function (row) {
+    var current = mapRecurringBusCount(row);
+    if (safeText(current.recurringBusCountId) !== recurringBusCountId) {
+      return row;
+    }
+
+    row.Status = getRecurringBusCountStatusCreated_();
+    row.LinkedBusCountID = safeText(busCount && busCount.busCountId);
+    return row;
+  });
+
+  writeFullTable(
+    getRecurringBusCountTab_(),
+    requestHeaderRow,
+    updatedRequestRows.map(function (row) {
+      return buildRowFromHeaders(requestHeaderRow, row);
+    })
+  );
+
+  writeAudit({
+    actie: 'CREATE_BUS_COUNT_FROM_RECURRING',
+    actor: actor,
+    documentType: 'RecurrenteBusTelling',
+    documentId: recurringBusCountId,
+    details: {
+      busCountId: safeText(busCount && busCount.busCountId),
+      techniekerCode: request.techniekerCode,
+    },
+  });
+
   return {
-    success: true,
-    created: createdIds.length,
-    skipped: skipped,
-    createdIds: createdIds,
-    message: `Bustellingssuggesties verwerkt. Aangemaakt: ${createdIds.length}, overgeslagen: ${skipped}.`
+    recurringRequest: getRecurringBusCountById(recurringBusCountId),
+    busCount: busCount,
   };
 }
 
 /* ---------------------------------------------------------
-   Jaarlijkse / periodieke samenvatting
+   Auto materialization from current scoring
    --------------------------------------------------------- */
 
-function buildBusCountTriggerSummary() {
-  const rules = getStockScoreRules();
-  const technicians = getActiveTechnicians();
+function createPendingRecurringBusCountRequests(payload) {
+  payload = payload || {};
 
-  let periodicDueCount = 0;
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertRecurringBusCountWriteAccess_(sessionId);
+  var candidates = getPendingRecurringBusCountCandidates();
+  var created = [];
 
-  technicians.forEach(technician => {
-    const lastApproved = getLastApprovedBusCountForTechnician(technician.code);
-    const daysSinceLast = lastApproved ? daysSinceIsoDate(lastApproved.documentDatumIso) : null;
+  candidates.forEach(function (candidate) {
+    var request = createRecurringBusCountRequest({
+      sessionId: sessionId,
+      techniekerCode: candidate.techniekerCode,
+      techniekerNaam: candidate.techniekerNaam,
+      score: candidate.score,
+      sourceType: 'RISK_SCORE',
+      reason: candidate.reason,
+      articleCodes: candidate.articleCodes,
+      documentDatum: Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd'),
+      actor: safeText(actor.naam || actor.email),
+    });
 
-    const due =
-      !lastApproved ||
-      daysSinceLast === null ||
-      daysSinceLast >= Number(rules.periodic_bus_count_days || 60);
-
-    if (due) periodicDueCount++;
+    created.push(request);
   });
 
-  const recurringAlerts = buildRecurringBusCountAlerts();
-  const targetedAlerts = buildGroupedTargetedBusCountSuggestions();
+  if (created.length) {
+    writeAudit({
+      actie: 'CREATE_PENDING_RECURRING_BUS_COUNT_REQUESTS',
+      actor: actor,
+      documentType: 'RecurrenteBusTelling',
+      documentId: 'BATCH',
+      details: {
+        createdCount: created.length,
+      },
+    });
+  }
 
   return {
-    periodicDueCount: periodicDueCount,
-    recurringRiskCount: recurringAlerts.length,
-    targetedRiskCount: targetedAlerts.length,
-    totalSuggestedCounts: buildBusCountSuggestions().length
+    createdCount: created.length,
+    items: created,
+  };
+}
+
+/* ---------------------------------------------------------
+   Queries for screens
+   --------------------------------------------------------- */
+
+function buildRecurringBusCountSummary() {
+  var allRows = getAllRecurringBusCountRequests();
+  var pendingCandidates = getPendingRecurringBusCountCandidates();
+
+  return {
+    totaal: allRows.length,
+    open: allRows.filter(function (x) { return safeText(x.status) === getRecurringBusCountStatusOpen_(); }).length,
+    aangemaakt: allRows.filter(function (x) { return safeText(x.status) === getRecurringBusCountStatusCreated_(); }).length,
+    gesloten: allRows.filter(function (x) { return safeText(x.status) === getRecurringBusCountStatusClosed_(); }).length,
+    pendingCandidates: pendingCandidates.length,
+  };
+}
+
+function getRecurringBusCountDashboardData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertRecurringBusCountReadAccess_(sessionId);
+
+  var requests = getAllRecurringBusCountRequests();
+  var candidates = buildRecurringBusCountCandidates();
+
+  return {
+    requests: requests,
+    candidates: candidates,
+    pendingCandidates: candidates.filter(function (item) {
+      return !item.hasOpenRecurringRequest && !item.hasOpenBusCount;
+    }),
+    summary: Object.assign(
+      {},
+      buildRecurringBusCountSummary(),
+      { actorRol: safeText(actor.rol) }
+    ),
   };
 }

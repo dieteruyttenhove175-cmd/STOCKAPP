@@ -1,192 +1,516 @@
 <!DOCTYPE html>
-  (function () {
-    const sid = sessionStorage.getItem('stockapp.sid') || '';
-    if (!sid) return;
-
-    const url = new URL(window.location.href);
-    if (url.searchParams.get('sid')) return;
-
-    const targetView = <?= JSON.stringify(typeof targetView !== 'undefined' ? targetView : '') ?>;
-    const targetTechRef = <?= JSON.stringify(typeof targetTechRef !== 'undefined' ? targetTechRef : '') ?>;
-
-    if (targetView) url.searchParams.set('view', targetView);
-    if (targetTechRef) url.searchParams.set('tech', targetTechRef);
-    url.searchParams.set('sid', sid);
-
-    window.location.replace(url.toString());
-  })();
-<html>
+<html lang="nl">
   <head>
-    <base target="_top">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DigiQS Login</title>
     <style>
       :root {
-        --bg: #f8fafc;
+        --bg: #f4f6fb;
         --card: #ffffff;
-        --line: #e2e8f0;
-        --text: #0f172a;
-        --muted: #475569;
-        --primary: #0f172a;
-        --danger: #fee2e2;
+        --text: #1f2937;
+        --muted: #6b7280;
+        --border: #dbe2ea;
+        --primary: #0f62fe;
+        --primary-dark: #0b4fd1;
+        --danger-bg: #fff1f2;
+        --danger-border: #fecdd3;
+        --danger-text: #9f1239;
+        --ok-bg: #eff6ff;
+        --ok-border: #bfdbfe;
+        --ok-text: #1d4ed8;
+        --shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+        --radius: 18px;
       }
 
-      * { box-sizing: border-box; }
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
       body {
         margin: 0;
+        padding: 0;
+        min-height: 100%;
         font-family: Arial, sans-serif;
-        background: var(--bg);
+        background: linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
         color: var(--text);
+      }
+
+      body {
         min-height: 100vh;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 16px;
-      }
-
-      .card {
-        width: 100%;
-        max-width: 460px;
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 18px;
         padding: 24px;
       }
 
-      h1 { margin: 0 0 10px; }
-      .muted { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
-
-      label {
-        display: block;
-        font-weight: 700;
-        margin-bottom: 6px;
-        margin-top: 12px;
+      .page {
+        width: 100%;
+        max-width: 1040px;
+        display: grid;
+        grid-template-columns: minmax(280px, 1.1fr) minmax(320px, 0.9fr);
+        gap: 24px;
+        align-items: stretch;
       }
 
-      input, button {
-        width: 100%;
-        border-radius: 12px;
+      .panel,
+      .card {
+        background: var(--card);
+        border: 1px solid rgba(219, 226, 234, 0.9);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .panel {
+        padding: 36px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 520px;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--primary);
+        margin-bottom: 24px;
+      }
+
+      .brand-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--primary);
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 34px;
+        line-height: 1.12;
+      }
+
+      .lead {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
         font-size: 16px;
+        max-width: 520px;
+      }
+
+      .info-grid {
+        display: grid;
+        gap: 14px;
+        margin-top: 28px;
+      }
+
+      .info-item {
+        padding: 16px 18px;
+        border-radius: 14px;
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+      }
+
+      .info-item strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+
+      .info-item span {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .card {
+        padding: 32px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+
+      .card p {
+        margin: 0 0 24px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .message {
+        display: none;
+        margin-bottom: 18px;
+        padding: 14px 16px;
+        border-radius: 12px;
+        font-size: 14px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+
+      .message.is-visible {
+        display: block;
+      }
+
+      .message.is-error {
+        background: var(--danger-bg);
+        border: 1px solid var(--danger-border);
+        color: var(--danger-text);
+      }
+
+      .message.is-info {
+        background: var(--ok-bg);
+        border: 1px solid var(--ok-border);
+        color: var(--ok-text);
+      }
+
+      form {
+        display: grid;
+        gap: 16px;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      label {
+        font-size: 14px;
+        font-weight: 700;
       }
 
       input {
-        border: 1px solid var(--line);
-        padding: 12px;
+        width: 100%;
+        min-height: 48px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        font-size: 15px;
+        outline: none;
+        transition: border-color 0.18s ease, box-shadow 0.18s ease;
+      }
+
+      input:focus {
+        border-color: rgba(15, 98, 254, 0.7);
+        box-shadow: 0 0 0 4px rgba(15, 98, 254, 0.12);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        margin-top: 4px;
       }
 
       button {
-        margin-top: 18px;
+        min-height: 48px;
+        min-width: 160px;
+        padding: 12px 18px;
         border: 0;
+        border-radius: 12px;
         background: var(--primary);
         color: #fff;
-        padding: 12px;
+        font-size: 15px;
         font-weight: 700;
         cursor: pointer;
+        transition: transform 0.14s ease, background 0.14s ease, opacity 0.14s ease;
       }
 
-      .error {
-        display: none;
-        margin-top: 14px;
-        background: var(--danger);
-        border: 1px solid #ef4444;
-        border-radius: 12px;
-        padding: 12px;
+      button:hover:not(:disabled) {
+        background: var(--primary-dark);
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.65;
+        cursor: wait;
+        transform: none;
+      }
+
+      .hint {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .footer-note {
+        margin-top: 20px;
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .spinner {
+        display: inline-block;
+        width: 15px;
+        height: 15px;
+        margin-right: 8px;
+        border: 2px solid rgba(255, 255, 255, 0.45);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 0.75s linear infinite;
+        vertical-align: -2px;
+      }
+
+      .is-hidden {
+        display: none !important;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (max-width: 900px) {
+        .page {
+          grid-template-columns: 1fr;
+        }
+
+        .panel {
+          min-height: auto;
+        }
       }
     </style>
   </head>
-  <body>
-    <div class="card">
-      <h1>DigiQS login</h1>
-      <div class="muted">Niet voor admin. Admin gebruikt het Google-account.</div>
+  <body
+    data-target-view="<?= targetView ?>"
+    data-target-tech-ref="<?= targetTechRef ?>"
+    data-login-error="<?= loginError ?>"
+  >
+    <div class="page">
+      <section class="panel" aria-label="Introductie">
+        <div>
+          <div class="brand">
+            <span class="brand-dot" aria-hidden="true"></span>
+            <span>DigiQS StockApp</span>
+          </div>
+          <h1>Aanmelden op de webapp</h1>
+          <p class="lead">
+            Meld je aan met je login-email en code. Deze pagina is bedoeld voor techniekers,
+            magazijn, mobiel magazijn, manager en analyse-gebruikers die met de custom sessieflow werken.
+          </p>
 
-      <label for="loginEmail">Login-email</label>
-      <input id="loginEmail" type="email" autocomplete="username">
+          <div class="info-grid">
+            <div class="info-item">
+              <strong>Admin-login</strong>
+              <span>Admins gebruiken hier geen code-login maar melden aan via hun Google-account.</span>
+            </div>
+            <div class="info-item">
+              <strong>Sessiegedrag</strong>
+              <span>Na succesvolle login wordt de sessie lokaal bewaard en word je doorgestuurd naar de juiste pagina.</span>
+            </div>
+            <div class="info-item">
+              <strong>Veiliger opgebouwd</strong>
+              <span>Alle JavaScript staat nu in geldige scriptblokken en niet meer los vóór de pagina-opbouw.</span>
+            </div>
+          </div>
+        </div>
 
-      <label for="loginCode">Code</label>
-      <input id="loginCode" type="password" autocomplete="current-password">
+        <div class="footer-note">
+          Doel van deze refactor: een stabiele login-shell die later makkelijk gekoppeld kan worden aan gedeelde helpers en foutafhandeling.
+        </div>
+      </section>
 
-      <button id="loginBtn" onclick="doLogin()">Inloggen</button>
+      <section class="card" aria-label="Loginformulier">
+        <div id="messageBox" class="message" role="alert" aria-live="polite"></div>
 
-      <div id="errorBox" class="error"></div>
+        <h2>Inloggen</h2>
+        <p>Gebruik dezelfde login-email en code als in het gebruikersbeheer van de app.</p>
+
+        <form id="loginForm" novalidate>
+          <div class="field">
+            <label for="loginEmail">Login-email</label>
+            <input
+              id="loginEmail"
+              name="loginEmail"
+              type="email"
+              autocomplete="username"
+              placeholder="naam@bedrijf.be"
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="loginCode">Code</label>
+            <input
+              id="loginCode"
+              name="loginCode"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Voer je code in"
+              required
+            />
+          </div>
+
+          <div class="actions">
+            <button id="submitButton" type="submit">
+              <span id="submitSpinner" class="spinner is-hidden" aria-hidden="true"></span>
+              <span id="submitLabel">Inloggen</span>
+            </button>
+            <span class="hint">Bij een verlopen sessie kom je automatisch terug op dit scherm.</span>
+          </div>
+        </form>
+      </section>
     </div>
 
     <script>
-      const TARGET_VIEW = '<?= targetView ?>';
-      const TARGET_TECH_REF = '<?= targetTechRef ?>';
-      const LOGIN_ERROR = '<?= loginError ?>';
+      (function redirectWhenSessionAlreadyExists() {
+        try {
+          const sid = sessionStorage.getItem('stockapp.sid') || '';
+          if (!sid) return;
 
-      function showError(message) {
-        const box = document.getElementById('errorBox');
-        box.textContent = message || 'Login mislukt.';
-        box.style.display = 'block';
-      }
+          const url = new URL(window.location.href);
+          if (url.searchParams.get('sid')) return;
 
-      function baseUrl() {
-        return window.location.href.split('?')[0];
-      }
+          const targetView = document.body.dataset.targetView || '';
+          const targetTechRef = document.body.dataset.targetTechRef || '';
 
-      function buildTargetUrl(result) {
-        const url = new URL(baseUrl());
-        const user = result.user || {};
+          if (targetView) url.searchParams.set('view', targetView);
+          if (targetTechRef) url.searchParams.set('tech', targetTechRef);
+          url.searchParams.set('sid', sid);
 
-        if (TARGET_VIEW) {
-          url.searchParams.set('view', TARGET_VIEW);
-        } else if (user.rol === 'Magazijn') {
-          url.searchParams.set('view', 'warehouse');
-        } else if (user.rol === 'Manager' || user.rol === 'Analyse') {
-          url.searchParams.set('view', 'manager');
+          window.location.replace(url.toString());
+        } catch (err) {
+          console.warn('Kon bestaande sessie niet herstellen.', err);
+        }
+      })();
+    </script>
+
+    <script>
+      (function initLoginPage() {
+        const form = document.getElementById('loginForm');
+        const emailInput = document.getElementById('loginEmail');
+        const codeInput = document.getElementById('loginCode');
+        const submitButton = document.getElementById('submitButton');
+        const submitSpinner = document.getElementById('submitSpinner');
+        const submitLabel = document.getElementById('submitLabel');
+        const messageBox = document.getElementById('messageBox');
+
+        const targetView = document.body.dataset.targetView || '';
+        const targetTechRef = document.body.dataset.targetTechRef || '';
+        const initialError = document.body.dataset.loginError || '';
+
+        function normalizeEmail(value) {
+          return String(value || '').trim().toLowerCase();
         }
 
-        if (TARGET_TECH_REF) {
-          url.searchParams.set('tech', TARGET_TECH_REF);
-        } else if (!TARGET_VIEW && user.rol === 'Technieker' && user.techniekerCode) {
-          url.searchParams.set('tech', user.techniekerCode);
+        function safeText(value) {
+          return String(value == null ? '' : value).trim();
         }
 
-        url.searchParams.set('sid', result.sessionId);
-        return url.toString();
-      }
+        function showMessage(text, type) {
+          const normalizedText = safeText(text);
+          messageBox.className = 'message';
+          messageBox.textContent = normalizedText;
 
-      function doLogin() {
-        document.getElementById('errorBox').style.display = 'none';
+          if (!normalizedText) {
+            return;
+          }
 
-        const loginEmail = (document.getElementById('loginEmail').value || '').trim();
-        const loginCode = (document.getElementById('loginCode').value || '').trim();
-
-        if (!loginEmail) {
-          showError('Login-email ontbreekt.');
-          return;
+          messageBox.classList.add('is-visible');
+          messageBox.classList.add(type === 'info' ? 'is-info' : 'is-error');
         }
 
-        if (!loginCode) {
-          showError('Code ontbreekt.');
-          return;
+        function clearMessage() {
+          messageBox.className = 'message';
+          messageBox.textContent = '';
         }
 
-        const btn = document.getElementById('loginBtn');
-        btn.disabled = true;
-        btn.textContent = 'Inloggen...';
+        function setBusy(isBusy) {
+          submitButton.disabled = !!isBusy;
+          submitSpinner.classList.toggle('is-hidden', !isBusy);
+          submitLabel.textContent = isBusy ? 'Bezig...' : 'Inloggen';
+          emailInput.readOnly = !!isBusy;
+          codeInput.readOnly = !!isBusy;
+        }
 
-        google.script.run
-          .withSuccessHandler(result => {
-            window.location.href = buildTargetUrl(result);
-          })
-          .withFailureHandler(err => {
-            showError(err && err.message ? err.message : 'Login mislukt.');
-            btn.disabled = false;
-            btn.textContent = 'Inloggen';
-          })
-          .loginWithCode({
-            loginEmail,
-            loginCode
-          });
-      }
+        function buildRedirectUrl(sessionId, responseUser) {
+          const url = new URL(window.location.href);
+          const resolvedView = targetView || '';
+          const resolvedTechRef = targetTechRef || (responseUser && responseUser.techniekerCode) || '';
 
-      document.getElementById('loginCode').addEventListener('keydown', e => {
-        if (e.key === 'Enter') doLogin();
-      });
+          if (resolvedView) {
+            url.searchParams.set('view', resolvedView);
+          } else {
+            url.searchParams.delete('view');
+          }
 
-      if (LOGIN_ERROR) {
-        showError(LOGIN_ERROR);
-      }
+          if (resolvedTechRef) {
+            url.searchParams.set('tech', resolvedTechRef);
+          } else {
+            url.searchParams.delete('tech');
+          }
+
+          url.searchParams.set('sid', sessionId);
+          return url.toString();
+        }
+
+        function handleLoginSuccess(response) {
+          const sessionId = safeText(response && response.sessionId);
+          if (!sessionId) {
+            throw new Error('Geen sessie-ID ontvangen na login.');
+          }
+
+          sessionStorage.setItem('stockapp.sid', sessionId);
+          showMessage('Login gelukt. Je wordt doorgestuurd...', 'info');
+          window.location.replace(buildRedirectUrl(sessionId, response && response.user));
+        }
+
+        function handleLoginError(error) {
+          const message = safeText(error && error.message) || 'Onbekende fout bij aanmelden.';
+          showMessage(message, 'error');
+          setBusy(false);
+        }
+
+        form.addEventListener('submit', function (event) {
+          event.preventDefault();
+          clearMessage();
+
+          const loginEmail = normalizeEmail(emailInput.value);
+          const loginCode = safeText(codeInput.value);
+
+          if (!loginEmail) {
+            showMessage('Login-email ontbreekt.', 'error');
+            emailInput.focus();
+            return;
+          }
+
+          if (!loginCode) {
+            showMessage('Code ontbreekt.', 'error');
+            codeInput.focus();
+            return;
+          }
+
+          setBusy(true);
+
+          google.script.run
+            .withSuccessHandler(function (response) {
+              try {
+                handleLoginSuccess(response || {});
+              } catch (err) {
+                handleLoginError(err);
+              }
+            })
+            .withFailureHandler(handleLoginError)
+            .loginWithCode({
+              loginEmail: loginEmail,
+              loginCode: loginCode
+            });
+        });
+
+        if (initialError) {
+          showMessage(initialError, 'error');
+        }
+      })();
     </script>
   </body>
 </html>

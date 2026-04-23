@@ -1,239 +1,288 @@
 /* =========================================================
-   40A_ReceiptImportService.gs — upload/import ontvangstlijsten
-   Browser parsed rows -> Ontvangsten / OntvangstLijnen
+   40_ReceiptImportService.gs
+   Refactor: receipt import service
+   Doel:
+   - browser-geparste ontvangstlijnen normaliseren
+   - import bundelen per artikel
+   - manuele ontvangst automatisch aanmaken
+   - lijnen opslaan via ReceiptService
    ========================================================= */
 
-function parseReceiptDateFromFilename_(fileName) {
-  const text = safeText(fileName);
-  if (!text) return '';
+/* ---------------------------------------------------------
+   Helpers
+   --------------------------------------------------------- */
 
-  const match = text.match(/(\d{2})[-_](\d{2})[-_](\d{4})/);
-  if (!match) return '';
+function normalizeReceiptImportLine_(line) {
+  line = line || {};
 
-  return `${match[3]}-${match[2]}-${match[1]}`;
-}
-
-function normalizeImportedReceiptRow_(row) {
-  const artikelCode = safeText(
-    row.artikelCode ||
-    row.ArtikelCode ||
-    row.Artikel ||
-    row.artikel ||
-    ''
+  var artikelCode = safeText(
+    line.artikelCode ||
+    line.artikelNr ||
+    line.code ||
+    line.articleCode
   );
 
-  const artikelOmschrijving = safeText(
-    row.artikelOmschrijving ||
-    row.ArtikelOmschrijving ||
-    row.Omschrijving ||
-    row.omschrijving ||
-    ''
+  var artikelOmschrijving = safeText(
+    line.artikelOmschrijving ||
+    line.artikel ||
+    line.omschrijving ||
+    line.description
   );
 
-  const eenheid = safeText(
-    row.eenheid ||
-    row.Eenheid ||
-    ''
+  var eenheid = safeText(
+    line.eenheid ||
+    line.unit ||
+    'Stuk'
   );
 
-  const aantal = safeNumber(
-    row.aantal ||
-    row.Aantal ||
-    0,
+  var besteldAantal = safeNumber(
+    line.besteldAantal ||
+    line.besteld ||
+    line.expectedQty,
     0
   );
 
-  const palletNr = safeText(
-    row.palletNr ||
-    row.PalletNR ||
-    row.PalletNr ||
-    ''
-  );
-
-  const labelNr = safeText(
-    row.labelNr ||
-    row.LabelNR ||
-    row.LabelNr ||
-    ''
-  );
-
-  const notitie = safeText(
-    row.notitie ||
-    row.Notitie ||
-    ''
+  var ontvangenAantal = safeNumber(
+    line.ontvangenAantal ||
+    line.ontvangen ||
+    line.receivedQty ||
+    line.aantal,
+    0
   );
 
   return {
-    artikelCode,
-    artikelOmschrijving,
-    eenheid,
-    aantal,
-    palletNr,
-    labelNr,
-    notitie
+    artikelCode: artikelCode,
+    artikelOmschrijving: artikelOmschrijving,
+    typeMateriaal: safeText(
+      line.typeMateriaal ||
+      determineMaterialTypeFromArticle(artikelCode)
+    ),
+    eenheid: eenheid,
+    besteldAantal: besteldAantal,
+    ontvangenAantal: ontvangenAantal,
+    deltaAantal: safeNumber(
+      line.deltaAantal,
+      ontvangenAantal - besteldAantal
+    ),
+    redenDelta: safeText(line.redenDelta || line.deltaReason),
+    opmerking: safeText(line.opmerking || line.remark || line.note),
+    palletNr: safeText(line.palletNr || line.pallet || ''),
+    label: safeText(line.label || ''),
   };
 }
 
-function validateImportedReceiptRows_(rows) {
-  if (!(rows || []).length) {
-    throw new Error('Geen ontvangstlijnen ontvangen.');
+function validateReceiptImportLines_(lines) {
+  var rows = Array.isArray(lines) ? lines : [];
+  if (!rows.length) {
+    throw new Error('Geen importlijnen ontvangen.');
   }
 
-  const errors = [];
+  rows.forEach(function (line, index) {
+    var rowNr = index + 1;
 
-  (rows || []).forEach((row, idx) => {
-    const rowNr = idx + 1;
-
-    if (!safeText(row.artikelCode)) {
-      errors.push(`Rij ${rowNr}: artikelcode ontbreekt.`);
+    if (!safeText(line.artikelCode)) {
+      throw new Error('Artikelcode ontbreekt op importlijn ' + rowNr + '.');
     }
-
-    if (!safeText(row.artikelOmschrijving)) {
-      errors.push(`Rij ${rowNr}: omschrijving ontbreekt.`);
+    if (safeNumber(line.ontvangenAantal, 0) < 0) {
+      throw new Error('Ontvangen aantal mag niet negatief zijn op importlijn ' + rowNr + '.');
     }
-
-    if (!safeText(row.eenheid)) {
-      errors.push(`Rij ${rowNr}: eenheid ontbreekt.`);
-    }
-
-    if (safeNumber(row.aantal, 0) <= 0) {
-      errors.push(`Rij ${rowNr}: aantal moet groter zijn dan 0.`);
+    if (
+      safeNumber(line.deltaAantal, 0) !== 0 &&
+      !safeText(line.redenDelta)
+    ) {
+      throw new Error('Reden delta is verplicht op importlijn ' + rowNr + '.');
     }
   });
 
-  if (errors.length) {
-    throw new Error(errors.join(' | '));
-  }
+  return true;
 }
 
-function groupImportedReceiptRows_(rows) {
-  const grouped = {};
+function buildReceiptImportGroupKey_(line) {
+  return [
+    safeText(line.artikelCode),
+    safeText(line.eenheid),
+    safeText(line.typeMateriaal)
+  ].join('|');
+}
 
-  (rows || []).forEach(row => {
-    const key = [
-      safeText(row.artikelCode),
-      safeText(row.eenheid)
-    ].join('|');
+function groupImportedReceiptLines_(lines) {
+  var grouped = {};
+
+  (Array.isArray(lines) ? lines : []).forEach(function (line) {
+    var key = buildReceiptImportGroupKey_(line);
 
     if (!grouped[key]) {
       grouped[key] = {
-        artikelCode: safeText(row.artikelCode),
-        artikelOmschrijving: safeText(row.artikelOmschrijving),
-        eenheid: safeText(row.eenheid),
+        artikelCode: safeText(line.artikelCode),
+        artikelOmschrijving: safeText(line.artikelOmschrijving),
+        typeMateriaal: safeText(line.typeMateriaal),
+        eenheid: safeText(line.eenheid),
         besteldAantal: 0,
         ontvangenAantal: 0,
+        deltaAantal: 0,
         redenDelta: '',
         opmerking: '',
-        _pallets: [],
-        _labels: [],
-        _notes: []
+        palletNr: '',
+        label: '',
       };
     }
 
-    grouped[key].besteldAantal += safeNumber(row.aantal, 0);
-    grouped[key].ontvangenAantal += safeNumber(row.aantal, 0);
+    grouped[key].besteldAantal += safeNumber(line.besteldAantal, 0);
+    grouped[key].ontvangenAantal += safeNumber(line.ontvangenAantal, 0);
+    grouped[key].deltaAantal =
+      safeNumber(grouped[key].ontvangenAantal, 0) -
+      safeNumber(grouped[key].besteldAantal, 0);
 
-    if (row.palletNr) grouped[key]._pallets.push(safeText(row.palletNr));
-    if (row.labelNr) grouped[key]._labels.push(safeText(row.labelNr));
-    if (row.notitie) grouped[key]._notes.push(safeText(row.notitie));
+    if (!grouped[key].artikelOmschrijving) {
+      grouped[key].artikelOmschrijving = safeText(line.artikelOmschrijving);
+    }
+    if (!grouped[key].opmerking && safeText(line.opmerking)) {
+      grouped[key].opmerking = safeText(line.opmerking);
+    }
+    if (!grouped[key].palletNr && safeText(line.palletNr)) {
+      grouped[key].palletNr = safeText(line.palletNr);
+    }
+    if (!grouped[key].label && safeText(line.label)) {
+      grouped[key].label = safeText(line.label);
+    }
+
+    if (safeText(line.redenDelta)) {
+      grouped[key].redenDelta = safeText(line.redenDelta);
+    }
   });
 
-  return Object.keys(grouped).map(key => {
-    const item = grouped[key];
-
-    const pallets = [...new Set(item._pallets)].filter(Boolean);
-    const labels = [...new Set(item._labels)].filter(Boolean);
-    const notes = [...new Set(item._notes)].filter(Boolean);
-
-    const parts = ['Import uit ontvangstlijst'];
-
-    if (pallets.length) parts.push(`Pallets: ${pallets.join(', ')}`);
-    if (labels.length) parts.push(`Labels: ${labels.join(', ')}`);
-    if (notes.length) parts.push(`Notities: ${notes.join(' | ')}`);
-
-    return {
-      artikelCode: item.artikelCode,
-      artikelOmschrijving: item.artikelOmschrijving,
-      eenheid: item.eenheid,
-      besteldAantal: item.besteldAantal,
-      ontvangenAantal: item.ontvangenAantal,
-      redenDelta: '',
-      opmerking: parts.join(' | ')
-    };
-  });
+  return Object.keys(grouped)
+    .map(function (key) {
+      var row = grouped[key];
+      if (safeNumber(row.deltaAantal, 0) === 0) {
+        row.redenDelta = '';
+      }
+      return row;
+    })
+    .sort(function (a, b) {
+      return (
+        safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving)) ||
+        safeText(a.artikelCode).localeCompare(safeText(b.artikelCode))
+      );
+    });
 }
 
-function importReceiptFromRows(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertWarehouseAccess(sessionId);
-
-  const rawRows = Array.isArray(payload.rows) ? payload.rows : [];
-  if (!rawRows.length) {
-    throw new Error('Geen ontvangstlijnen ontvangen.');
-  }
-
-  const fileName = safeText(payload.fileName);
-  const documentDatum =
-    safeText(payload.documentDatum) ||
-    parseReceiptDateFromFilename_(fileName);
-
-  if (!documentDatum) {
-    throw new Error('Documentdatum ontbreekt.');
-  }
-
-  const normalizedRows = rawRows.map(normalizeImportedReceiptRow_);
-  validateImportedReceiptRows_(normalizedRows);
-
-  const groupedLines = groupImportedReceiptRows_(normalizedRows);
-  if (!groupedLines.length) {
-    throw new Error('Na groepering bleven geen geldige ontvangstlijnen over.');
-  }
-
-  const createResult = createManualReceipt({
-    sessionId: sessionId,
-    bestelbonNr: safeText(payload.bestelbonNr),
-    externeReferentie: safeText(payload.externeReferentie),
-    documentDatum: documentDatum,
-    ontvangstdatum: safeText(payload.ontvangstdatum || documentDatum),
-    bronType: 'Upload'
-  });
-
-  const ontvangstId = safeText(createResult.ontvangstId);
-  if (!ontvangstId) {
-    throw new Error('Kon geen ontvangst aanmaken.');
-  }
-
-  saveReceiptLines({
-    sessionId: sessionId,
-    ontvangstId: ontvangstId,
-    lines: groupedLines
-  });
-
-  updateReceiptHeader(ontvangstId, {
-    BronType: 'Upload',
-    BronBestand: fileName
-  });
-
-  writeAudit(
-    'Ontvangst geïmporteerd uit upload',
-    user.rol,
-    user.naam || user.email || 'Magazijn',
-    'Ontvangst',
-    ontvangstId,
-    {
-      bronBestand: fileName,
-      documentDatum: documentDatum,
-      ruweLijnen: rawRows.length,
-      gegroepeerdeLijnen: groupedLines.length
+function deriveReceiptImportMaterialType_(lines) {
+  var types = {};
+  (Array.isArray(lines) ? lines : []).forEach(function (line) {
+    var t = safeText(line.typeMateriaal);
+    if (t) {
+      types[t] = true;
     }
-  );
+  });
+
+  var keys = Object.keys(types);
+  if (!keys.length) return '';
+  if (keys.length === 1) return keys[0];
+  return 'Gemengd';
+}
+
+function summarizeImportedReceiptLines_(lines) {
+  var rows = Array.isArray(lines) ? lines : [];
 
   return {
-    success: true,
-    ontvangstId: ontvangstId,
-    lineCount: groupedLines.length,
-    message: 'Ontvangst succesvol geïmporteerd.'
+    lineCount: rows.length,
+    articleCount: rows.length,
+    totaalBesteld: rows.reduce(function (sum, row) {
+      return sum + safeNumber(row.besteldAantal, 0);
+    }, 0),
+    totaalOntvangen: rows.reduce(function (sum, row) {
+      return sum + safeNumber(row.ontvangenAantal, 0);
+    }, 0),
+    deltaLijnen: rows.filter(function (row) {
+      return safeNumber(row.deltaAantal, 0) !== 0;
+    }).length,
+  };
+}
+
+/* ---------------------------------------------------------
+   Main import flow
+   --------------------------------------------------------- */
+
+function importParsedReceiptLines(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+
+  if (typeof createManualReceipt !== 'function' || typeof saveReceiptLines !== 'function') {
+    throw new Error('Receipt service ontbreekt. Werk eerst het receiptblok in.');
+  }
+
+  var rawLines = Array.isArray(payload.lines) ? payload.lines : [];
+  var normalizedLines = rawLines.map(normalizeReceiptImportLine_);
+  validateReceiptImportLines_(normalizedLines);
+
+  var groupedLines = groupImportedReceiptLines_(normalizedLines);
+  var materialType = deriveReceiptImportMaterialType_(groupedLines);
+
+  var headerPayload = {
+    sessionId: sessionId,
+    leverancier: safeText(payload.leverancier || payload.supplier || 'Fluvius'),
+    typeMateriaal: safeText(payload.typeMateriaal || materialType),
+    bestelbonNr: safeText(payload.bestelbonNr || payload.purchaseOrderNumber || payload.poNumber),
+    externeReferentie: safeText(payload.externeReferentie || payload.reference || payload.fluviusReferentie),
+    documentDatum: safeText(payload.documentDatum || payload.documentDate),
+    ontvangstDatum: safeText(payload.ontvangstDatum || payload.receiveDate || payload.documentDatum || payload.documentDate),
+    bronType: safeText(payload.bronType || payload.sourceType || 'Upload'),
+    bronReferentie: safeText(payload.bronReferentie || payload.sourceReference || payload.bestandsNaam || payload.fileName),
+    opmerking: safeText(payload.opmerking || payload.remark),
+    actor: safeText(actor.naam || actor.email),
+  };
+
+  var receipt = createManualReceipt(headerPayload);
+
+  var saved = saveReceiptLines({
+    sessionId: sessionId,
+    receiptId: receipt.receiptId,
+    lines: groupedLines,
+  });
+
+  writeAudit({
+    actie: 'IMPORT_RECEIPT_LINES',
+    actor: actor,
+    documentType: 'Ontvangst',
+    documentId: receipt.receiptId,
+    details: {
+      sourceType: safeText(headerPayload.bronType),
+      sourceReference: safeText(headerPayload.bronReferentie),
+      rawLineCount: rawLines.length,
+      groupedLineCount: groupedLines.length,
+    },
+  });
+
+  return {
+    receipt: saved,
+    summary: summarizeImportedReceiptLines_(groupedLines),
+    rawLineCount: rawLines.length,
+    groupedLineCount: groupedLines.length,
+  };
+}
+
+/* ---------------------------------------------------------
+   Preview helper
+   --------------------------------------------------------- */
+
+function previewParsedReceiptLines(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  assertWarehouseAccess(sessionId);
+
+  var rawLines = Array.isArray(payload.lines) ? payload.lines : [];
+  var normalizedLines = rawLines.map(normalizeReceiptImportLine_);
+  validateReceiptImportLines_(normalizedLines);
+
+  var groupedLines = groupImportedReceiptLines_(normalizedLines);
+
+  return {
+    items: groupedLines,
+    summary: summarizeImportedReceiptLines_(groupedLines),
+    rawLineCount: rawLines.length,
   };
 }

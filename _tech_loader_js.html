@@ -1,80 +1,547 @@
+/* =========================================================
+   _tech_loader_js.html
+   Refactor: technician dashboard loader
+   Doel:
+   - loader voor technieker-shell
+   - geplande beleveringen + grabbelbestellingen laden
+   - meldingen en beperkte acties verwerken
+   - tabnavigatie voor overzicht / bestellingen / meldingen
+   - selectie en refreshflow
+   ========================================================= */
 
-  function clearTechSelection() {
-    APP_STATE.selectedTechDeliveryId = null;
-    APP_STATE.selectedBusCountId = null;
+(function (window, document) {
+  'use strict';
 
-    if (typeof renderSelectedTechDelivery === 'function') {
-      renderSelectedTechDelivery(null);
+  var APP = window.STOCKAPP = window.STOCKAPP || {};
+  var MODEL = APP.model || window.BOOTSTRAP_MODEL || {};
+
+  if (APP.techLoaderInitialized) return;
+  APP.techLoaderInitialized = true;
+
+  var ROOT_ID = 'techApp';
+  var TECH_CODE = APP.safeText(
+    MODEL.techRef ||
+    MODEL.selectedTechnicianCode ||
+    MODEL.currentUserCode ||
+    ''
+  );
+
+  var TAB_KEYS = {
+    deliveries: 'deliveries',
+    orders: 'orders',
+    notifications: 'notifications'
+  };
+
+  var TAB_LABELS = {
+    deliveries: 'Beleveringen',
+    orders: 'Grabbelbestellingen',
+    notifications: 'Meldingen'
+  };
+
+  var state = {
+    activeTab: TAB_KEYS.deliveries,
+    selectedKey: '',
+    bannerMessage: '',
+    bannerType: 'info',
+    data: {
+      appData: null,
+      notifications: null
     }
+  };
 
-    if (typeof renderSelectedBusCount === 'function') {
-      renderSelectedBusCount(null);
+  function root() {
+    return document.getElementById(ROOT_ID);
+  }
+
+  function getTabPanelId(tabKey) {
+    return 'tech-tab-panel-' + tabKey;
+  }
+
+  function getBannerHtml() {
+    if (!APP.safeText(state.bannerMessage)) {
+      return '<div id="techPageBanner" hidden></div>';
+    }
+    return '<div id="techPageBanner">' + APP.renderBannerHtml(state.bannerMessage, state.bannerType) + '</div>';
+  }
+
+  function setBanner(message, type) {
+    state.bannerMessage = APP.safeText(message);
+    state.bannerType = APP.safeText(type || 'info');
+
+    var target = document.getElementById('techPageBanner');
+    if (target) {
+      APP.showBanner(target, state.bannerMessage, state.bannerType);
     }
   }
 
-  function initTechDefaultDates_() {
-    const today = new Date().toISOString().slice(0, 10);
-    ['mobileRequestDate'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el && !el.value) el.value = today;
+  function clearBanner() {
+    setBanner('', 'info');
+  }
+
+  function selectKey(key) {
+    state.selectedKey = APP.safeText(key);
+    renderActiveTab(false);
+  }
+
+  function getSummaryValue(summary, key) {
+    return APP.safeNumber(summary && summary[key], 0);
+  }
+
+  async function fetchAppData(force) {
+    if (state.data.appData && !force) return state.data.appData;
+
+    state.data.appData = await APP.api('getAppData', {
+      techniekerCode: TECH_CODE
+    }, {
+      useBusy: true,
+      busyTitle: 'Techniekergegevens laden…',
+      busySubtitle: 'Even wachten'
+    });
+
+    return state.data.appData;
+  }
+
+  async function fetchNotifications(force) {
+    var appData = await fetchAppData(force);
+    state.data.notifications = {
+      items: appData && appData.notifications ? appData.notifications : [],
+      summary: summarizeNotifications(appData && appData.notifications ? appData.notifications : [])
+    };
+    return state.data.notifications;
+  }
+
+  function summarizeNotifications(items) {
+    var rows = Array.isArray(items) ? items : [];
+
+    return {
+      totaal: rows.length,
+      open: rows.filter(function (x) { return APP.safeText(x.status) === 'Open'; }).length,
+      gelezen: rows.filter(function (x) { return APP.safeText(x.status) === 'Gelezen'; }).length,
+      verwerkt: rows.filter(function (x) { return APP.safeText(x.status) === 'Verwerkt'; }).length,
+      gesloten: rows.filter(function (x) { return APP.safeText(x.status) === 'Gesloten'; }).length
+    };
+  }
+
+  async function ensureTabData(tabKey, force) {
+    if (tabKey === TAB_KEYS.notifications) {
+      return fetchNotifications(force);
+    }
+    return fetchAppData(force);
+  }
+
+  function renderShellHeader() {
+    return [
+      '<header class="app-page-header">',
+        '<div class="app-page-title-wrap">',
+          '<h1 class="app-page-title">' + APP.escapeHtml(MODEL.pageTitle || 'Technieker dashboard') + '</h1>',
+          '<p class="app-page-subtitle">' + APP.escapeHtml(MODEL.pageSubtitle || '') + '</p>',
+        '</div>',
+        '<div class="app-page-meta">',
+          '<span class="role-badge">' + APP.escapeHtml(APP.safeText(MODEL.currentUserRole || MODEL.pageRole || 'technician')) + '</span>',
+          MODEL.currentUserName ? '<span class="chip">' + APP.escapeHtml(MODEL.currentUserName) + '</span>' : '',
+          TECH_CODE ? '<span class="chip">Ref ' + APP.escapeHtml(TECH_CODE) + '</span>' : '',
+          '<button class="btn btn-light" id="techRefreshBtn" type="button">Vernieuwen</button>',
+          '<button class="btn btn-light" id="techClearSelectionBtn" type="button">Selectie wissen</button>',
+          '<button class="btn" id="techLogoutBtn" type="button">Afmelden</button>',
+        '</div>',
+      '</header>'
+    ].join('');
+  }
+
+  function renderTabs() {
+    return [
+      '<div class="tabs" id="techDashboardTabs">',
+      Object.keys(TAB_KEYS).map(function (key) {
+        var tabKey = TAB_KEYS[key];
+        return '<button class="tab-btn' + (state.activeTab === tabKey ? ' is-active' : '') + '" type="button" data-tab="' + APP.escapeHtml(tabKey) + '">' + APP.escapeHtml(TAB_LABELS[tabKey]) + '</button>';
+      }).join(''),
+      '</div>'
+    ].join('');
+  }
+
+  function renderShellFrame() {
+    return [
+      '<div class="app-container">',
+        renderShellHeader(),
+        getBannerHtml(),
+        renderTabs(),
+        '<section class="stack" id="techDashboardPanels">',
+          Object.keys(TAB_KEYS).map(function (key) {
+            var tabKey = TAB_KEYS[key];
+            return '<div id="' + getTabPanelId(tabKey) + '" data-tab="' + APP.escapeHtml(tabKey) + '"' + (state.activeTab === tabKey ? '' : ' hidden') + '></div>';
+          }).join(''),
+        '</section>',
+      '</div>'
+    ].join('');
+  }
+
+  function bindShellEvents() {
+    Array.prototype.slice.call(document.querySelectorAll('#techDashboardTabs .tab-btn')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        state.activeTab = APP.safeText(button.getAttribute('data-tab'));
+        renderActiveTab(false);
+      });
+    });
+
+    var refreshBtn = document.getElementById('techRefreshBtn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', function () {
+        refreshCurrentTab(true);
+      });
+    }
+
+    var clearBtn = document.getElementById('techClearSelectionBtn');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function () {
+        state.selectedKey = '';
+        clearBanner();
+        renderActiveTab(false);
+      });
+    }
+
+    var logoutBtn = document.getElementById('techLogoutBtn');
+    if (logoutBtn) {
+      logoutBtn.addEventListener('click', function () {
+        APP.logout();
+      });
+    }
+  }
+
+  function renderSelectableTable(options) {
+    var rows = options.rows || [];
+    if (!rows.length) {
+      return APP.renderEmptyState(options.emptyMessage || 'Geen gegevens gevonden.');
+    }
+
+    return [
+      '<div class="table-wrap"><table class="data-table"><thead><tr>',
+      options.columns.map(function (col) {
+        return '<th' + (col.className ? ' class="' + APP.escapeHtml(col.className) + '"' : '') + '>' + APP.escapeHtml(col.label) + '</th>';
+      }).join(''),
+      '</tr></thead><tbody>',
+      rows.map(function (row) {
+        var rowKey = APP.safeText(options.getKey(row));
+        var isSelected = state.selectedKey === rowKey;
+        return '<tr data-select-key="' + APP.escapeHtml(rowKey) + '"' + (isSelected ? ' style="background:#eef2ff"' : '') + '>' +
+          options.columns.map(function (col) {
+            return '<td' + (col.className ? ' class="' + APP.escapeHtml(col.className) + '"' : '') + '>' + col.render(row) + '</td>';
+          }).join('') +
+        '</tr>';
+      }).join(''),
+      '</tbody></table></div>'
+    ].join('');
+  }
+
+  function bindSelectableRows(panel) {
+    Array.prototype.slice.call(panel.querySelectorAll('[data-select-key]')).forEach(function (row) {
+      row.addEventListener('click', function () {
+        selectKey(row.getAttribute('data-select-key'));
+      });
     });
   }
 
-  async function loadTechAll(fullRender) {
-    if (!ensureSession()) return;
+  function renderDeliveryMetrics(plannedDeliveries, deliveryGroups) {
+    var upcoming = Array.isArray(plannedDeliveries) ? plannedDeliveries : [];
+    var groups = Array.isArray(deliveryGroups) ? deliveryGroups : [];
 
-    if (fullRender) {
-      showBusy('Gegevens laden...');
+    return APP.renderMetricCards([
+      { label: 'Geplande beleveringen', value: APP.formatNumber(upcoming.length) },
+      { label: 'Bestelgroepen', value: APP.formatNumber(groups.length) },
+      { label: 'Klaargezet', value: APP.formatNumber(groups.filter(function (x) { return APP.safeText(x.status) === 'Klaargezet'; }).length) },
+      { label: 'Meegegeven', value: APP.formatNumber(groups.filter(function (x) { return APP.safeText(x.status) === 'Meegegeven'; }).length) },
+      { label: 'Ontvangen', value: APP.formatNumber(groups.filter(function (x) { return APP.safeText(x.status) === 'Ontvangen'; }).length) }
+    ]);
+  }
+
+  function renderOrderLineTable(lines) {
+    return APP.renderSimpleTable([
+      { label: 'ArtikelNr', render: function (row) { return APP.escapeHtml(row.artikelCode); } },
+      { label: 'Artikel', render: function (row) { return APP.escapeHtml(row.artikelOmschrijving); } },
+      { label: 'Type', render: function (row) { return APP.escapeHtml(row.typeMateriaal || ''); } },
+      { label: 'Eenheid', render: function (row) { return APP.escapeHtml(row.eenheid || ''); } },
+      { label: 'Gevraagd', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.gevraagdAantal)); } },
+      { label: 'Voorzien', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.voorzienAantal)); } },
+      { label: 'Ontvangen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.ontvangenAantal)); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Reden delta', render: function (row) { return APP.escapeHtml(row.redenDelta || ''); } }
+    ], lines || []);
+  }
+
+  function renderDeliveriesTab(data) {
+    var plannedDeliveries = data && data.plannedDeliveries || [];
+    var deliveryGroups = data && data.deliveryGroups || [];
+
+    return [
+      renderDeliveryMetrics(plannedDeliveries, deliveryGroups),
+      '<div class="split">',
+        '<section class="card section-pad">',
+          '<h3 class="section-title">Geplande beleveringen</h3>',
+          '<p class="section-subtitle">Je komende beleveringen en of er al een bestelling bestaat.</p>',
+          renderSelectableTable({
+            rows: plannedDeliveries,
+            getKey: function (row) { return 'delivery:' + row.deliveryId; },
+            emptyMessage: 'Geen geplande beleveringen gevonden.',
+            columns: [
+              { label: 'Datum', render: function (row) { return APP.escapeHtml(row.datumIso || ''); } },
+              { label: 'Tijdslot', render: function (row) { return APP.escapeHtml(row.windowLabel || row.startTijd || ''); } },
+              { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status || 'Gepland'); } },
+              { label: 'Cutoff', render: function (row) { return row.cutoffPassed ? '<span class="status-badge status-waarschuwing">Verstreken</span>' : '<span class="status-badge status-open">Open</span>'; } },
+              { label: 'Bestelling', render: function (row) { return row.hasExistingOrder ? '<span class="status-badge status-goedgekeurd">Ja</span>' : '<span class="status-badge status-open">Nee</span>'; } }
+            ]
+          }),
+        '</section>',
+        renderDeliveryDetail(plannedDeliveries, deliveryGroups),
+      '</div>'
+    ].join('');
+  }
+
+  function renderDeliveryDetail(plannedDeliveries, deliveryGroups) {
+    var selectedDelivery = (plannedDeliveries || []).find(function (row) {
+      return APP.safeText('delivery:' + row.deliveryId) === state.selectedKey;
+    });
+
+    if (selectedDelivery) {
+      var linkedGroup = (deliveryGroups || []).find(function (group) {
+        return APP.safeText(group.deliveryId) === APP.safeText(selectedDelivery.deliveryId);
+      });
+
+      return [
+        '<section class="card section-pad">',
+          '<h3 class="section-title">Details belevering</h3>',
+          '<div class="stack">',
+            '<div class="banner banner-info">Kies hier je belevering. Bestellen of aanpassen gebeurt op basis van dit levermoment.</div>',
+            '<div class="list-item">',
+              '<strong>Datum:</strong> ' + APP.escapeHtml(selectedDelivery.datumIso || '') + '<br />' +
+              '<strong>Tijdslot:</strong> ' + APP.escapeHtml(selectedDelivery.windowLabel || selectedDelivery.startTijd || '') + '<br />' +
+              '<strong>Status:</strong> ' + APP.renderStatusBadge(selectedDelivery.status || 'Gepland') + '<br />' +
+              '<strong>Cutoff:</strong> ' + (selectedDelivery.cutoffPassed ? 'verstreken' : 'nog open') + '<br />' +
+              '<strong>Bestelling:</strong> ' + (selectedDelivery.hasExistingOrder ? 'reeds aanwezig' : 'nog niet ingediend'),
+            '</div>',
+            linkedGroup
+              ? '<div>' + renderOrderLineTable(linkedGroup.lines || []) + '</div>'
+              : APP.renderEmptyState('Nog geen grabbelbestelling voor deze belevering.')
+          '</div>',
+        '</section>'
+      ].join('');
     }
 
-    try {
-      const techRef = window.techRef || '';
+    return '<section class="card section-pad"><h3 class="section-title">Details belevering</h3>' + APP.renderEmptyState('Kies een belevering om details te bekijken.') + '</section>';
+  }
 
-      const results = await Promise.all([
-        serverCall('getTechnicianDashboardData', withSession({ techRef })),
-        serverCall('getTechnicianNotificationsData', withSession({ techRef })),
-        serverCall('getTechnicianBusCountsData', withSession({ techRef })),
-        serverCall('getTechnicianMobileRequestsData', withSession({ techRef }))
-      ]);
+  function renderOrdersTab(data) {
+    var deliveryGroups = data && data.deliveryGroups || [];
 
-      renderTechDashboardData(results[0] || {});
-      renderTechNotificationsData(results[1] || {});
-      renderTechBusCountData(results[2] || {});
-      renderTechMobileRequestData(results[3] || {});
+    return [
+      APP.renderMetricCards([
+        { label: 'Bestelgroepen', value: APP.formatNumber(deliveryGroups.length) },
+        { label: 'Open', value: APP.formatNumber(deliveryGroups.filter(function (x) { return APP.safeText(x.status) === 'Open'; }).length) },
+        { label: 'Klaargezet', value: APP.formatNumber(deliveryGroups.filter(function (x) { return APP.safeText(x.status) === 'Klaargezet'; }).length) },
+        { label: 'Meegegeven', value: APP.formatNumber(deliveryGroups.filter(function (x) { return APP.safeText(x.status) === 'Meegegeven'; }).length) },
+        { label: 'Ontvangen', value: APP.formatNumber(deliveryGroups.filter(function (x) { return APP.safeText(x.status) === 'Ontvangen'; }).length) }
+      ]),
+      '<div class="split">',
+        '<section class="card section-pad">',
+          '<h3 class="section-title">Mijn grabbelbestellingen</h3>',
+          '<p class="section-subtitle">Selecteer een bestelgroep om de lijnen te zien.</p>',
+          renderSelectableTable({
+            rows: deliveryGroups,
+            getKey: function (row) { return 'order:' + row.deliveryId + '|' + row.techniekerCode; },
+            emptyMessage: 'Nog geen grabbelbestellingen gevonden.',
+            columns: [
+              { label: 'Belevering', render: function (row) { return APP.escapeHtml(row.deliveryId); } },
+              { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+              { label: 'Lijnen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.lineCount)); } },
+              { label: 'Gevraagd', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.totalRequested)); } },
+              { label: 'Voorzien', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.totalPrepared)); } }
+            ]
+          }),
+        '</section>',
+        renderOrderDetail(deliveryGroups),
+      '</div>'
+    ].join('');
+  }
 
-      switchTechTab(APP_STATE.techActiveTab || 'neworder');
-    } catch (err) {
-      showError(extractErrorMessage(err, 'Fout bij laden techniekergegevens.'), !!fullRender);
-    } finally {
-      if (fullRender) {
-        hideBusy();
+  function renderOrderDetail(deliveryGroups) {
+    var selectedGroup = (deliveryGroups || []).find(function (row) {
+      return APP.safeText('order:' + row.deliveryId + '|' + row.techniekerCode) === state.selectedKey;
+    });
+
+    if (!selectedGroup) {
+      return '<section class="card section-pad"><h3 class="section-title">Details bestelling</h3>' + APP.renderEmptyState('Kies een bestelgroep om de lijnen te bekijken.') + '</section>';
+    }
+
+    return [
+      '<section class="card section-pad">',
+        '<div class="toolbar">',
+          '<div><h3 class="section-title">Details bestelling</h3></div>',
+          '<div class="toolbar-right">',
+            '<button class="btn btn-success" type="button" id="confirmReceiptBtn" data-delivery-id="' + APP.escapeHtml(selectedGroup.deliveryId) + '" data-tech-code="' + APP.escapeHtml(selectedGroup.techniekerCode) + '">Ontvangst bevestigen</button>',
+          '</div>',
+        '</div>',
+        '<div class="stack">',
+          '<div class="list-item">',
+            '<strong>Belevering:</strong> ' + APP.escapeHtml(selectedGroup.deliveryId) + '<br />' +
+            '<strong>Status:</strong> ' + APP.renderStatusBadge(selectedGroup.status) + '<br />' +
+            '<strong>Totaal gevraagd:</strong> ' + APP.escapeHtml(APP.formatNumber(selectedGroup.totalRequested)) + '<br />' +
+            '<strong>Totaal voorzien:</strong> ' + APP.escapeHtml(APP.formatNumber(selectedGroup.totalPrepared)),
+          '</div>',
+          renderOrderLineTable(selectedGroup.lines || []),
+        '</div>',
+      '</section>'
+    ].join('');
+  }
+
+  function renderNotificationsTab(data) {
+    var items = data && data.items || [];
+    var summary = data && data.summary || {};
+
+    return [
+      APP.renderMetricCards([
+        { label: 'Totaal', value: APP.formatNumber(getSummaryValue(summary, 'totaal')) },
+        { label: 'Open', value: APP.formatNumber(getSummaryValue(summary, 'open')) },
+        { label: 'Gelezen', value: APP.formatNumber(getSummaryValue(summary, 'gelezen')) },
+        { label: 'Verwerkt', value: APP.formatNumber(getSummaryValue(summary, 'verwerkt')) },
+        { label: 'Gesloten', value: APP.formatNumber(getSummaryValue(summary, 'gesloten')) }
+      ]),
+      '<section class="card section-pad">',
+        '<div class="toolbar">',
+          '<div><h3 class="section-title">Meldingen</h3></div>',
+          '<div class="toolbar-right">',
+            '<button class="btn btn-light" id="techMarkAllNotificationsReadBtn" type="button">Alles als gelezen</button>',
+          '</div>',
+        '</div>',
+        APP.renderSimpleTable([
+          { label: 'Titel', render: function (row) { return APP.escapeHtml(row.titel); } },
+          { label: 'Bericht', render: function (row) { return APP.escapeHtml(row.bericht); } },
+          { label: 'Type', render: function (row) { return APP.escapeHtml(row.type || ''); } },
+          { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+          { label: 'Aangemaakt', render: function (row) { return APP.escapeHtml(row.aangemaaktOp || ''); } }
+        ], items),
+      '</section>'
+    ].join('');
+  }
+
+  function renderTab(tabKey, data) {
+    if (tabKey === TAB_KEYS.deliveries) return renderDeliveriesTab(data);
+    if (tabKey === TAB_KEYS.orders) return renderOrdersTab(data);
+    if (tabKey === TAB_KEYS.notifications) return renderNotificationsTab(data);
+    return APP.renderEmptyState('Tab niet beschikbaar.');
+  }
+
+  function bindTabSpecificEvents(tabKey, data) {
+    var panel = document.getElementById(getTabPanelId(tabKey));
+    if (!panel) return;
+
+    if (tabKey === TAB_KEYS.deliveries || tabKey === TAB_KEYS.orders) {
+      bindSelectableRows(panel);
+    }
+
+    if (tabKey === TAB_KEYS.orders) {
+      var confirmBtn = document.getElementById('confirmReceiptBtn');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', async function () {
+          try {
+            await APP.api('confirmTechnicianReceipt', {
+              deliveryId: confirmBtn.getAttribute('data-delivery-id'),
+              techniekerCode: confirmBtn.getAttribute('data-tech-code')
+            }, {
+              useBusy: true,
+              busyTitle: 'Ontvangst bevestigen…',
+              busySubtitle: 'Bestelling wordt bijgewerkt.'
+            });
+
+            state.data.appData = null;
+            await refreshCurrentTab(true);
+            setBanner('Ontvangst werd bevestigd.', 'success');
+          } catch (err) {
+            setBanner(err.message || 'Ontvangst kon niet bevestigd worden.', 'error');
+          }
+        });
+      }
+    }
+
+    if (tabKey === TAB_KEYS.notifications) {
+      var markAllBtn = document.getElementById('techMarkAllNotificationsReadBtn');
+      if (markAllBtn) {
+        markAllBtn.addEventListener('click', async function () {
+          try {
+            await APP.api('markAllNotificationsRead', {}, {
+              useBusy: true,
+              busyTitle: 'Meldingen bijwerken…',
+              busySubtitle: 'Alles wordt als gelezen gemarkeerd.'
+            });
+
+            state.data.appData = null;
+            state.data.notifications = null;
+            await refreshCurrentTab(true);
+            setBanner('Alle meldingen zijn als gelezen gemarkeerd.', 'success');
+          } catch (err) {
+            setBanner(err.message || 'Meldingen konden niet bijgewerkt worden.', 'error');
+          }
+        });
       }
     }
   }
 
-  function manualTechRefresh() {
-    clearError();
-    loadTechAll(true);
-  }
+  async function renderActiveTab(forceReload) {
+    Array.prototype.slice.call(document.querySelectorAll('#techDashboardTabs .tab-btn')).forEach(function (button) {
+      button.classList.toggle('is-active', APP.safeText(button.getAttribute('data-tab')) === state.activeTab);
+    });
 
-  function initTechnicianShell() {
-    const actorInput = document.getElementById('actorInput');
-    if (actorInput && !actorInput.value && window.CURRENT_USER_NAME) {
-      actorInput.value = window.CURRENT_USER_NAME;
+    Array.prototype.slice.call(document.querySelectorAll('#techDashboardPanels > [data-tab]')).forEach(function (panel) {
+      panel.hidden = APP.safeText(panel.getAttribute('data-tab')) !== state.activeTab;
+    });
+
+    var panel = document.getElementById(getTabPanelId(state.activeTab));
+    if (!panel) return;
+
+    panel.innerHTML = APP.renderLoadingState('Gegevens laden…');
+
+    try {
+      var data = await ensureTabData(state.activeTab, !!forceReload);
+      panel.innerHTML = renderTab(state.activeTab, data || {});
+      bindTabSpecificEvents(state.activeTab, data || {});
+    } catch (err) {
+      panel.innerHTML = '<div class="banner banner-error">' + APP.escapeHtml(err.message || 'Laden mislukt.') + '</div>';
     }
-
-    initTechDefaultDates_();
-    APP_STATE.techActiveTab = APP_STATE.techActiveTab || 'neworder';
-
-    loadTechAll(true);
   }
 
-  setInterval(() => {
-    if (document.visibilityState !== 'visible') return;
+  async function refreshCurrentTab(forceReload) {
+    await renderActiveTab(!!forceReload);
+  }
 
-    const secondsSinceInteraction = (Date.now() - APP_STATE.lastUserInteractionAt) / 1000;
-    if (secondsSinceInteraction < 20) return;
+  async function preloadTechData() {
+    await Promise.all([
+      fetchAppData(false),
+      fetchNotifications(false)
+    ]);
+  }
 
-    // stille refresh: geen popup, geen success message
-    loadTechAll(false);
-  }, 30000);
+  async function initTechDashboard() {
+    var appRoot = root();
+    if (!appRoot) return;
+
+    appRoot.className = 'app-shell';
+    APP.setHtml(appRoot, renderShellFrame());
+    bindShellEvents();
+
+    try {
+      await preloadTechData();
+      await renderActiveTab(false);
+    } catch (err) {
+      setBanner(err.message || 'Dashboard kon niet geladen worden.', 'error');
+    }
+  }
+
+  APP.techState = state;
+  APP.initTechDashboard = initTechDashboard;
+  APP.refreshTechTab = refreshCurrentTab;
+  APP.fetchTechAppData = fetchAppData;
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTechDashboard);
+  } else {
+    initTechDashboard();
+  }
+
+})(window, document);

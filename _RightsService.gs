@@ -1,106 +1,284 @@
 /* =========================================================
-   12_RightsService.gs — rechten / rolchecks / techniekerchecks
+   12_RightsService.gs
+   Refactor: rights + access policy service
+   Doel:
+   - centrale rolchecks
+   - duidelijke page/domain access helpers
+   - technieker-toegang apart en herbruikbaar
    ========================================================= */
+
+/* ---------------------------------------------------------
+   Generic role helpers
+   --------------------------------------------------------- */
+
+function getUserRole_(user) {
+  return safeText(user && (user.rol || user.userRole || user.Role));
+}
+
+function isRole_(user, roleName) {
+  return getUserRole_(user) === safeText(roleName);
+}
+
+function isAdmin_(user) {
+  return isRole_(user, ROLE.ADMIN || 'Admin');
+}
 
 function roleAllowed(user, allowedRoles) {
   if (!user) return false;
-  if (user.rol === ROLE.ADMIN) return true;
-  return (allowedRoles || []).includes(user.rol);
+  if (isAdmin_(user)) return true;
+
+  var roles = Array.isArray(allowedRoles) ? allowedRoles : [];
+  var currentRole = getUserRole_(user);
+
+  return roles.some(function (roleName) {
+    return currentRole === safeText(roleName);
+  });
 }
 
-function assertRoleAllowed(allowedRoles, sessionId) {
-  const user = requireLoggedInUser(sessionId);
+function assertRoleAllowed(user, allowedRoles, message) {
   if (!roleAllowed(user, allowedRoles)) {
-    throw new Error('Geen rechten voor deze actie.');
+    throw new Error(message || 'Geen rechten voor deze actie.');
   }
+  return true;
+}
+
+/* ---------------------------------------------------------
+   Generic access assertions by domain
+   --------------------------------------------------------- */
+
+function assertWarehouseAccess(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.WAREHOUSE, ROLE.MANAGER],
+    'Geen rechten voor magazijn.'
+  );
   return user;
 }
 
-function assertWarehouseAccess(sessionId) {
-  return assertRoleAllowed([ROLE.WAREHOUSE, ROLE.MANAGER], sessionId);
-}
-
-function assertMobileWarehouseAccess(sessionId) {
-  return assertRoleAllowed([ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER], sessionId);
-}
-
-function assertWarehouseOrMobileAccess(sessionId) {
-  return assertRoleAllowed([ROLE.WAREHOUSE, ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER], sessionId);
+function assertMobileWarehouseRoleAccess(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER],
+    'Geen rechten voor mobiel magazijn.'
+  );
+  return user;
 }
 
 function assertManagerAccess(sessionId) {
-  return assertRoleAllowed([ROLE.MANAGER], sessionId);
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.MANAGER],
+    'Geen rechten voor manager.'
+  );
+  return user;
 }
 
-function assertManagerOrAnalysisAccess(sessionId) {
-  return assertRoleAllowed([ROLE.MANAGER, ROLE.ANALYSIS], sessionId);
+function assertWarehouseOrMobileWarehouseAccess(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.WAREHOUSE, ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER],
+    'Geen rechten voor magazijn of mobiel magazijn.'
+  );
+  return user;
 }
 
-function getActiveTechnicians() {
-  return readObjectsSafe(TABS.TECHNICIANS)
-    .map(mapTechnician)
-    .filter(x => x.active);
+function assertAuthenticatedAccess(sessionId) {
+  return requireLoggedInUser(sessionId);
 }
 
-function getTechnicianByCode(code) {
-  return getActiveTechnicians().find(x => normalizeRef(x.code) === normalizeRef(code)) || null;
+/* ---------------------------------------------------------
+   Technician directory
+   --------------------------------------------------------- */
+
+function mapRightsTechnician_(row) {
+  return {
+    code: safeText(row.Code || row.TechniekerCode || row.Ref),
+    naam: safeText(row.Naam || row.Name),
+    ref: safeText(row.Ref || row.Code || row.TechniekerCode),
+    actief: row.Actief === undefined ? true : isTrue(row.Actief),
+    email: normalizeLoginEmail(row.Email || row.Mail || ''),
+    mobileWarehouseCode: safeText(row.MobileWarehouseCode || ''),
+  };
 }
 
-function getTechnicianNameByCode(code) {
-  const found = getTechnicianByCode(code);
-  return found ? found.naam : safeText(code);
-}
-
-function findTechnicianByRef(technicians, techRef) {
-  const ref = normalizeRef(techRef);
-  if (!ref) return null;
-
-  return (technicians || []).find(t => {
-    const code = normalizeRef(t.code);
-    const name = normalizeRef(t.naam);
-    return [
-      code,
-      name,
-      normalizeRef(code + '-' + name),
-      normalizeRef(name + '-' + code)
-    ].includes(ref);
-  }) || null;
+function getAllActiveTechniciansForRights_() {
+  return readObjectsSafe(TABS.TECHNICIANS || 'Techniekers')
+    .map(mapRightsTechnician_)
+    .filter(function (item) {
+      return item.actief;
+    });
 }
 
 function resolveTechnicianByRef(techRef) {
-  const technicians = readObjectsSafe(TABS.TECHNICIANS).map(mapTechnician);
-  const technician = findTechnicianByRef(technicians, techRef);
+  var target = safeText(techRef);
+  if (!target) return null;
 
-  if (!technician || !technician.active) {
-    throw new Error('Technieker niet gevonden of niet actief.');
-  }
-
-  return technician;
+  var all = getAllActiveTechniciansForRights_();
+  return all.find(function (item) {
+    return (
+      safeText(item.ref) === target ||
+      safeText(item.code) === target ||
+      safeText(item.naam) === target
+    );
+  }) || null;
 }
 
-function assertTechnicianAccessToRef(techRef, sessionId) {
-  const user = requireLoggedInUser(sessionId);
-  const technician = resolveTechnicianByRef(techRef);
-
-  if (user.rol === ROLE.ADMIN) {
-    return { user, technician, readOnly: false };
-  }
-
-  if (
-    user.rol === ROLE.TECHNICIAN &&
-    normalizeRef(user.techniekerCode) === normalizeRef(technician.code)
-  ) {
-    return { user, technician, readOnly: false };
-  }
-
-  throw new Error('Geen rechten voor deze techniekerdata.');
+function resolveActorTechnicianRef_(user) {
+  return safeText(
+    user &&
+    (
+      user.techniekerCode ||
+      user.technicianCode ||
+      user.code ||
+      user.ref
+    )
+  );
 }
 
-function deliveryMatchesTechnician(delivery, technician) {
-  const deliveryCode = normalizeRef(delivery.techniekerCode);
-  const deliveryName = normalizeRef(delivery.technieker);
-  const techCode = normalizeRef(technician.code);
-  const techName = normalizeRef(technician.naam);
+/* ---------------------------------------------------------
+   Technician access policy
+   --------------------------------------------------------- */
 
-  return (deliveryCode && deliveryCode === techCode) || (deliveryName && deliveryName === techName);
+function canUserAccessTechnicianRef(user, techRef) {
+  var target = resolveTechnicianByRef(techRef);
+  if (!target) return false;
+
+  if (isAdmin_(user)) return true;
+  if (roleAllowed(user, [ROLE.MANAGER, ROLE.WAREHOUSE, ROLE.MOBILE_WAREHOUSE])) return true;
+
+  if (roleAllowed(user, [ROLE.TECHNICIAN])) {
+    var ownRef = resolveActorTechnicianRef_(user);
+    return !!ownRef && ownRef === safeText(target.ref);
+  }
+
+  return false;
+}
+
+function assertTechnicianAccessToRef(sessionId, techRef) {
+  var user = requireLoggedInUser(sessionId);
+  var target = resolveTechnicianByRef(techRef);
+
+  if (!target) {
+    throw new Error('Technieker niet gevonden.');
+  }
+
+  if (!canUserAccessTechnicianRef(user, techRef)) {
+    throw new Error('Geen toegang tot deze technieker.');
+  }
+
+  return {
+    user: user,
+    technician: target,
+  };
+}
+
+function assertTechnicianSelfAccess(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.TECHNICIAN],
+    'Geen rechten voor technieker.'
+  );
+
+  var ownRef = resolveActorTechnicianRef_(user);
+  if (!ownRef) {
+    throw new Error('Geen gekoppelde techniekerref gevonden.');
+  }
+
+  var technician = resolveTechnicianByRef(ownRef);
+  if (!technician) {
+    throw new Error('Gekoppelde technieker niet gevonden.');
+  }
+
+  return {
+    user: user,
+    technician: technician,
+  };
+}
+
+/* ---------------------------------------------------------
+   Page access policy
+   --------------------------------------------------------- */
+
+function canAccessPage(user, pageName, techRef) {
+  var page = safeText(pageName);
+
+  if (!user) return false;
+  if (isAdmin_(user)) return true;
+
+  if (page === 'Warehouse') {
+    return roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MANAGER]);
+  }
+
+  if (page === 'Manager') {
+    return roleAllowed(user, [ROLE.MANAGER]);
+  }
+
+  if (page === 'MobileWarehouse') {
+    return roleAllowed(user, [ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER]);
+  }
+
+  if (page === 'Index') {
+    if (roleAllowed(user, [ROLE.MANAGER, ROLE.WAREHOUSE, ROLE.MOBILE_WAREHOUSE])) {
+      return true;
+    }
+    if (roleAllowed(user, [ROLE.TECHNICIAN])) {
+      return canUserAccessTechnicianRef(user, techRef || resolveActorTechnicianRef_(user));
+    }
+    return false;
+  }
+
+  if (page === 'Login') {
+    return true;
+  }
+
+  return false;
+}
+
+function assertPageAccess(user, pageName, techRef) {
+  if (!canAccessPage(user, pageName, techRef)) {
+    throw new Error('Geen toegang tot pagina ' + safeText(pageName) + '.');
+  }
+
+  if (safeText(pageName) === 'Index' && roleAllowed(user, [ROLE.TECHNICIAN])) {
+    var targetRef = safeText(techRef || resolveActorTechnicianRef_(user));
+    if (!targetRef) {
+      throw new Error('Geen techniekerreferentie beschikbaar.');
+    }
+    assertTechnicianAccessToRef(user.sessionId || '', targetRef);
+  }
+
+  return true;
+}
+
+/* ---------------------------------------------------------
+   Convenience policy helpers for services
+   --------------------------------------------------------- */
+
+function canApproveReceipts(user) {
+  return roleAllowed(user, [ROLE.MANAGER]);
+}
+
+function canApproveReturns(user) {
+  return roleAllowed(user, [ROLE.MANAGER]);
+}
+
+function canBookNeedIssues(user) {
+  return roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MANAGER, ROLE.MOBILE_WAREHOUSE]);
+}
+
+function canCreateTransfers(user) {
+  return roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER]);
+}
+
+function canApproveTransfers(user) {
+  return roleAllowed(user, [ROLE.MANAGER]);
+}
+
+function canViewCentralStock(user) {
+  return roleAllowed(user, [ROLE.WAREHOUSE, ROLE.MANAGER, ROLE.MOBILE_WAREHOUSE]);
 }

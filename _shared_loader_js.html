@@ -1,259 +1,744 @@
+/* =========================================================
+   _shared_loader_js.html
+   Refactor: shared dashboard loader
+   Doel:
+   - gedeelde loader voor Warehouse en Manager shells
+   - tabnavigatie + centrale state
+   - datasets laden via backendservices
+   - eenvoudige renderers voor summary + tabellen
+   - selectie, refresh en bannerflow
+   ========================================================= */
 
-  function toggleElementVisible_(id, visible) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.toggle('hidden', !visible);
+(function (window, document) {
+  'use strict';
+
+  var APP = window.STOCKAPP = window.STOCKAPP || {};
+  var MODEL = APP.model || window.BOOTSTRAP_MODEL || {};
+
+  if (APP.sharedLoaderInitialized) return;
+  APP.sharedLoaderInitialized = true;
+
+  var VIEW_ROLE = String((MODEL.pageRole || '')).toLowerCase();
+  var IS_MANAGER = VIEW_ROLE === 'manager';
+  var ROOT_ID = IS_MANAGER ? 'managerApp' : 'warehouseApp';
+
+  var TAB_KEYS = {
+    deliveries: 'deliveries',
+    receipts: 'receipts',
+    returns: 'returns',
+    needIssues: 'needIssues',
+    central: 'central',
+    notifications: 'notifications',
+    audit: 'audit',
+    busCounts: 'busCounts',
+    centralCounts: 'centralCounts',
+    stockRisk: 'stockRisk',
+    recurringBusCounts: 'recurringBusCounts',
+    consumptionImports: 'consumptionImports',
+    consumptionProcesses: 'consumptionProcesses',
+    consumptionBookings: 'consumptionBookings',
+    consumptionProposals: 'consumptionProposals',
+    materialCatalog: 'materialCatalog'
+  };
+
+  var DEFAULT_TAB = TAB_KEYS.deliveries;
+
+  var TAB_LABELS = {
+    deliveries: 'Grabbelstock beleveringen',
+    receipts: 'Ontvangsten',
+    returns: 'Retouren',
+    needIssues: 'Behoefte-uitgiftes',
+    central: 'Voorraad & tellingen',
+    notifications: 'Meldingen',
+    audit: 'Audit',
+    busCounts: 'Bustellingen',
+    centralCounts: 'Centrale tellingen',
+    stockRisk: 'Stockrisico',
+    recurringBusCounts: 'Recurrente bustellingen',
+    consumptionImports: 'Verbruiksimport',
+    consumptionProcesses: 'Verbruiksverwerking',
+    consumptionBookings: 'Verbruiksboekingen',
+    consumptionProposals: 'Verbruiksvoorstellen',
+    materialCatalog: 'Artikellijst'
+  };
+
+  function getVisibleTabs() {
+    if (IS_MANAGER) {
+      return [
+        TAB_KEYS.deliveries,
+        TAB_KEYS.receipts,
+        TAB_KEYS.returns,
+        TAB_KEYS.needIssues,
+        TAB_KEYS.central,
+        TAB_KEYS.busCounts,
+        TAB_KEYS.centralCounts,
+        TAB_KEYS.stockRisk,
+        TAB_KEYS.recurringBusCounts,
+        TAB_KEYS.consumptionImports,
+        TAB_KEYS.consumptionProcesses,
+        TAB_KEYS.consumptionBookings,
+        TAB_KEYS.consumptionProposals,
+        TAB_KEYS.materialCatalog,
+        TAB_KEYS.notifications,
+        TAB_KEYS.audit
+      ];
+    }
+
+    return [
+      TAB_KEYS.deliveries,
+      TAB_KEYS.receipts,
+      TAB_KEYS.returns,
+      TAB_KEYS.needIssues,
+      TAB_KEYS.central,
+      TAB_KEYS.busCounts,
+      TAB_KEYS.centralCounts,
+      TAB_KEYS.stockRisk,
+      TAB_KEYS.recurringBusCounts,
+      TAB_KEYS.consumptionImports,
+      TAB_KEYS.consumptionProcesses,
+      TAB_KEYS.consumptionBookings,
+      TAB_KEYS.consumptionProposals,
+      TAB_KEYS.materialCatalog,
+      TAB_KEYS.notifications
+    ];
   }
 
-  function applyPagePermissions_() {
-    toggleElementVisible_('createReceiptBtn', hasPermission('canCreateReceipt'));
-    toggleElementVisible_('uploadReceiptBtn', hasPermission('canUploadReceipt'));
-    toggleElementVisible_('saveReceiptBtn', hasPermission('canEditReceipt'));
-    toggleElementVisible_('submitReceiptBtn', hasPermission('canSubmitReceipt'));
+  var state = {
+    activeTab: DEFAULT_TAB,
+    bannerMessage: '',
+    bannerType: 'info',
+    selectedKey: '',
+    data: {
+      deliveries: null,
+      receipts: null,
+      returns: null,
+      needIssues: null,
+      central: null,
+      notifications: null,
+      audit: null,
+      busCounts: null,
+      centralCounts: null,
+      stockRisk: null,
+      recurringBusCounts: null,
+      consumptionImports: null,
+      consumptionProcesses: null,
+      consumptionBookings: null,
+      consumptionProposals: null,
+      materialCatalog: null
+    }
+  };
 
-    toggleElementVisible_('createReturnBtn', hasPermission('canCreateReturn'));
-    toggleElementVisible_('saveReturnBtn', hasPermission('canCreateReturn'));
-    toggleElementVisible_('submitReturnBtn', hasPermission('canCreateReturn'));
-
-    toggleElementVisible_('createNeedIssueBtn', hasPermission('canCreateNeedIssue'));
-    toggleElementVisible_('saveNeedIssueBtn', hasPermission('canCreateNeedIssue'));
-    toggleElementVisible_('bookNeedIssueBtn', hasPermission('canBookNeedIssue'));
-
-    toggleElementVisible_('createFullBusCountBtn', hasPermission('canSeeCentralStock'));
-    toggleElementVisible_('submitStockAdjustBtn', hasPermission('canSeeCentralStock'));
+  function root() {
+    return document.getElementById(ROOT_ID);
   }
 
-  function buildCentralPayload_() {
-    const warehouseData = APP_STATE.warehouseData || {};
-    const receiptsData = APP_STATE.receiptsData || {};
-    const returnsData = APP_STATE.returnsData || {};
-    const needIssueData = APP_STATE.needIssueData || {};
+  function getTabPanelId(tabKey) {
+    return 'tab-panel-' + tabKey;
+  }
 
-    const receiptAlerts = ((receiptsData.receipts) || [])
-      .filter(item => Number(item.deltaCount || 0) > 0)
-      .map(item => ({
-        type: 'Ontvangst',
-        reference: item.ontvangstId || '',
-        extraInfo: item.bestelbonNr || '',
-        status: (typeof getReceiptUiStatus === 'function' ? getReceiptUiStatus(item) : (item.status || '')),
-        delta: item.deltaCount || 0,
-        actionHtml: item.ontvangstId
-          ? `<button class="btn-light" onclick="selectReceipt('${escapeJs(item.ontvangstId)}');switchTab('receipts');">Open</button>`
-          : ''
-      }));
+  function getBannerHtml() {
+    if (!APP.safeText(state.bannerMessage)) return '<div id="pageBanner" hidden></div>';
+    return '<div id="pageBanner">' + APP.renderBannerHtml(state.bannerMessage, state.bannerType) + '</div>';
+  }
 
-    const deliveryAlerts = ((warehouseData.upcomingGroups) || [])
-      .filter(group =>
-        (group.lineItems || []).some(line =>
-          Number(line.deltaDozen || 0) > 0 || String(line.redenDelta || '').trim()
-        )
-      )
-      .map(group => ({
-        type: 'Grabbelstock',
-        reference: group.techniekerNaam || '',
-        extraInfo: group.klaarTegenLabel || '',
-        status: group.groupStatus || '',
-        delta: (group.lineItems || []).filter(line =>
-          Number(line.deltaDozen || 0) > 0 || String(line.redenDelta || '').trim()
-        ).length,
-        actionHtml: group.key
-          ? `<button class="btn-light" onclick="selectGroup('${escapeJs(group.key)}');switchTab('deliveries');">Open</button>`
-          : ''
-      }));
+  function setBanner(message, type) {
+    state.bannerMessage = APP.safeText(message);
+    state.bannerType = APP.safeText(type || 'info');
+    var target = document.getElementById('pageBanner');
+    if (target) APP.showBanner(target, state.bannerMessage, state.bannerType);
+  }
 
-    const rawAlerts = ((warehouseData.deltaCountAlerts) || []).map(item => ({
-      type: 'Signaal',
-      reference: item.artikelCode || '',
-      extraInfo: item.artikelOmschrijving || '',
-      status: 'Open',
-      delta: item.signalCount || 0,
-      actionHtml: ''
+  function clearBanner() {
+    setBanner('', 'info');
+  }
+
+  function selectKey(key) {
+    state.selectedKey = APP.safeText(key);
+    renderActiveTab(false);
+  }
+
+  function getSummaryValue(summary, key) {
+    return APP.safeNumber(summary && summary[key], 0);
+  }
+
+  function renderShellHeader() {
+    return [
+      '<header class="app-page-header">',
+        '<div class="app-page-title-wrap">',
+          '<h1 class="app-page-title">' + APP.escapeHtml(MODEL.pageTitle || 'Dashboard') + '</h1>',
+          '<p class="app-page-subtitle">' + APP.escapeHtml(MODEL.pageSubtitle || '') + '</p>',
+        '</div>',
+        '<div class="app-page-meta">',
+          '<span class="role-badge">' + APP.escapeHtml(APP.safeText(MODEL.currentUserRole || MODEL.pageRole || '')) + '</span>',
+          MODEL.currentUserName ? '<span class="chip">' + APP.escapeHtml(MODEL.currentUserName) + '</span>' : '',
+          '<button class="btn btn-light" id="refreshAllBtn" type="button">Vernieuwen</button>',
+          '<button class="btn btn-light" id="clearSelectionBtn" type="button">Selectie wissen</button>',
+          '<button class="btn" id="logoutBtn" type="button">Afmelden</button>',
+        '</div>',
+      '</header>'
+    ].join('');
+  }
+
+  function renderTabs() {
+    return [
+      '<div class="tabs" id="dashboardTabs">',
+      getVisibleTabs().map(function (tabKey) {
+        return '<button class="tab-btn' + (state.activeTab === tabKey ? ' is-active' : '') + '" type="button" data-tab="' + APP.escapeHtml(tabKey) + '">' + APP.escapeHtml(TAB_LABELS[tabKey] || tabKey) + '</button>';
+      }).join(''),
+      '</div>'
+    ].join('');
+  }
+
+  function renderShellFrame() {
+    return [
+      '<div class="app-container">',
+        renderShellHeader(),
+        getBannerHtml(),
+        renderTabs(),
+        '<section class="stack" id="dashboardPanels">',
+          getVisibleTabs().map(function (tabKey) {
+            return '<div id="' + getTabPanelId(tabKey) + '" data-tab="' + APP.escapeHtml(tabKey) + '"' + (state.activeTab === tabKey ? '' : ' hidden') + '></div>';
+          }).join(''),
+        '</section>',
+      '</div>'
+    ].join('');
+  }
+
+  function bindShellEvents() {
+    Array.prototype.slice.call(document.querySelectorAll('#dashboardTabs .tab-btn')).forEach(function (button) {
+      button.addEventListener('click', function () {
+        state.activeTab = APP.safeText(button.getAttribute('data-tab'));
+        renderActiveTab(false);
+      });
+    });
+
+    var refreshBtn = document.getElementById('refreshAllBtn');
+    if (refreshBtn) refreshBtn.addEventListener('click', function () { refreshCurrentTab(true); });
+
+    var clearBtn = document.getElementById('clearSelectionBtn');
+    if (clearBtn) clearBtn.addEventListener('click', function () {
+      state.selectedKey = '';
+      clearBanner();
+      renderActiveTab(false);
+    });
+
+    var logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) logoutBtn.addEventListener('click', function () { APP.logout(); });
+  }
+
+  async function fetchData(functionName, stateKey, busyTitle, force) {
+    if (state.data[stateKey] && !force) return state.data[stateKey];
+    state.data[stateKey] = await APP.api(functionName, {}, {
+      useBusy: true,
+      busyTitle: busyTitle,
+      busySubtitle: 'Even wachten'
+    });
+    return state.data[stateKey];
+  }
+
+  async function ensureTabData(tabKey, force) {
+    if (tabKey === TAB_KEYS.deliveries) return fetchData('getWarehouseData', 'deliveries', 'Beleveringen laden…', force);
+    if (tabKey === TAB_KEYS.receipts) return fetchData('getReceiptsData', 'receipts', 'Ontvangsten laden…', force);
+    if (tabKey === TAB_KEYS.returns) return fetchData('getReturnsData', 'returns', 'Retouren laden…', force);
+    if (tabKey === TAB_KEYS.needIssues) return fetchData('getNeedIssuesData', 'needIssues', 'Behoefte-uitgiftes laden…', force);
+    if (tabKey === TAB_KEYS.central) return fetchData('getCentralStockData', 'central', 'Voorraad laden…', force);
+    if (tabKey === TAB_KEYS.notifications) return fetchData('getNotificationsData', 'notifications', 'Meldingen laden…', force);
+    if (tabKey === TAB_KEYS.audit) return IS_MANAGER ? fetchData('getAuditData', 'audit', 'Audit laden…', force) : { items: [], summary: {} };
+    if (tabKey === TAB_KEYS.busCounts) return fetchData('getBusCountsData', 'busCounts', 'Bustellingen laden…', force);
+    if (tabKey === TAB_KEYS.centralCounts) return fetchData('getCentralCountsData', 'centralCounts', 'Centrale tellingen laden…', force);
+    if (tabKey === TAB_KEYS.stockRisk) return fetchData('getStockRiskDashboardData', 'stockRisk', 'Stockrisico laden…', force);
+    if (tabKey === TAB_KEYS.recurringBusCounts) return fetchData('getRecurringBusCountDashboardData', 'recurringBusCounts', 'Recurrente bustellingen laden…', force);
+    if (tabKey === TAB_KEYS.consumptionImports) return fetchData('getConsumptionImportData', 'consumptionImports', 'Verbruiksimport laden…', force);
+    if (tabKey === TAB_KEYS.consumptionProcesses) return fetchData('getConsumptionProcessData', 'consumptionProcesses', 'Verbruiksverwerking laden…', force);
+    if (tabKey === TAB_KEYS.consumptionBookings) return fetchData('getConsumptionBookingData', 'consumptionBookings', 'Verbruiksboekingen laden…', force);
+    if (tabKey === TAB_KEYS.consumptionProposals) return fetchData('getConsumptionProposalData', 'consumptionProposals', 'Verbruiksvoorstellen laden…', force);
+    if (tabKey === TAB_KEYS.materialCatalog) return fetchData('getMaterialCatalogData', 'materialCatalog', 'Artikellijst laden…', force);
+    return null;
+  }
+
+  async function preloadBaseData() {
+    await Promise.all([
+      ensureTabData(TAB_KEYS.deliveries, false),
+      ensureTabData(TAB_KEYS.notifications, false)
+    ]);
+  }
+
+  function renderMetricsFromSummary(summary, keys) {
+    return APP.renderMetricCards((keys || []).map(function (item) {
+      return { label: item.label, value: APP.formatNumber(getSummaryValue(summary, item.key)), help: item.help || '' };
     }));
-
-    return {
-      centralWarehouse:
-        needIssueData.centralWarehouse ||
-        receiptsData.centralWarehouse ||
-        warehouseData.centralWarehouse ||
-        [],
-      busStock:
-        needIssueData.busStock ||
-        warehouseData.busStock ||
-        [],
-      technicians:
-        needIssueData.technicians ||
-        returnsData.technicians ||
-        [],
-      deltaAlerts: []
-        .concat(deliveryAlerts)
-        .concat(receiptAlerts)
-        .concat(rawAlerts)
-    };
   }
 
-  function buildNotificationsPayload_() {
-    const warehouseData = APP_STATE.warehouseData || {};
-    const notifications = ((warehouseData.notifications) || []).map(item => ({
-      notificatieId: item.notificatieId || '',
-      type: item.type || 'Melding',
-      status: item.status || '',
-      titel: item.titel || '',
-      bericht: item.bericht || '',
-      aangemaaktOp: item.aangemaaktOp || ''
-    }));
+  function renderSelectableTable(options) {
+    var rows = options.rows || [];
+    if (!rows.length) return APP.renderEmptyState(options.emptyMessage || 'Geen gegevens gevonden.');
 
-    return {
-      notifications: notifications,
-      reminders: notifications.filter(item => String(item.status || '') === 'Open')
-    };
+    return [
+      '<div class="table-wrap"><table class="data-table"><thead><tr>',
+      options.columns.map(function (col) {
+        return '<th' + (col.className ? ' class="' + APP.escapeHtml(col.className) + '"' : '') + '>' + APP.escapeHtml(col.label) + '</th>';
+      }).join(''),
+      '</tr></thead><tbody>',
+      rows.map(function (row) {
+        var rowKey = APP.safeText(options.getKey(row));
+        var isSelected = state.selectedKey === rowKey;
+        return '<tr data-select-key="' + APP.escapeHtml(rowKey) + '"' + (isSelected ? ' style="background:#eef2ff"' : '') + '>' +
+          options.columns.map(function (col) {
+            return '<td' + (col.className ? ' class="' + APP.escapeHtml(col.className) + '"' : '') + '>' + col.render(row) + '</td>';
+          }).join('') +
+        '</tr>';
+      }).join(''),
+      '</tbody></table></div>'
+    ].join('');
   }
 
-  function renderDashboardStats_() {
-    const el = document.getElementById('stats');
-    if (!el) return;
-
-    const warehouseStats = (APP_STATE.warehouseData && APP_STATE.warehouseData.stats) || {};
-    const receipts = (APP_STATE.receiptsData && APP_STATE.receiptsData.receipts) || [];
-    const returns = (APP_STATE.returnsData && APP_STATE.returnsData.returns) || [];
-    const issues = (APP_STATE.needIssueData && APP_STATE.needIssueData.issues) || [];
-
-    el.innerHTML = `
-      <div class="stat"><div class="label">Open beleveringen</div><div class="value">${warehouseStats.open || 0}</div></div>
-      <div class="stat"><div class="label">Klaargezet</div><div class="value">${warehouseStats.klaargezet || 0}</div></div>
-      <div class="stat"><div class="label">Open ontvangsten</div><div class="value">${receipts.filter(x => String(x.status || '') !== 'Goedgekeurd').length}</div></div>
-      <div class="stat"><div class="label">Open retouren</div><div class="value">${returns.filter(x => String(x.status || '') !== 'Goedgekeurd').length}</div></div>
-      <div class="stat"><div class="label">Open behoefte-uitgiftes</div><div class="value">${issues.filter(x => String(x.status || '') !== 'Geboekt').length}</div></div>
-      <div class="stat"><div class="label">Signalen</div><div class="value">${((APP_STATE.warehouseData && APP_STATE.warehouseData.deltaCountAlerts) || []).length}</div></div>
-    `;
+  function bindSelectableRows(panel) {
+    Array.prototype.slice.call(panel.querySelectorAll('[data-select-key]')).forEach(function (row) {
+      row.addEventListener('click', function () {
+        selectKey(row.getAttribute('data-select-key'));
+      });
+    });
   }
 
-  function renderAllSections_() {
-    renderDashboardStats_();
-
-    if (typeof renderDeliveriesSection === 'function') {
-      renderDeliveriesSection(APP_STATE.warehouseData || {});
-    }
-
-    if (typeof renderReceiptsSection === 'function') {
-      renderReceiptsSection(APP_STATE.receiptsData || {});
-    }
-
-    if (typeof renderReturnsSection === 'function') {
-      renderReturnsSection(APP_STATE.returnsData || {});
-    }
-
-    if (typeof renderNeedIssuesSection === 'function') {
-      renderNeedIssuesSection(APP_STATE.needIssueData || {});
-    }
-
-    if (typeof renderCentralSection === 'function') {
-      renderCentralSection(buildCentralPayload_());
-    }
-
-    if (typeof renderNotificationsSection === 'function') {
-      renderNotificationsSection(buildNotificationsPayload_());
-    }
-
-    if (typeof renderAutoNeedProposals === 'function') {
-      renderAutoNeedProposals(APP_STATE.autoNeedProposalPayload || { proposals: [] });
-    }
+  function renderDetailCard(title, contentHtml) {
+    return '<section class="card section-pad"><h3 class="section-title">' + APP.escapeHtml(title) + '</h3>' + contentHtml + '</section>';
   }
 
-<script>
-  async function loadAll(fullRender) {
-    if (!ensureSession()) return;
+  function renderLinesTable(lines, extraColumns) {
+    return APP.renderSimpleTable([
+      { label: 'ArtikelNr', render: function (row) { return APP.escapeHtml(row.artikelCode); } },
+      { label: 'Artikel', render: function (row) { return APP.escapeHtml(row.artikelOmschrijving); } },
+      { label: 'Type', render: function (row) { return APP.escapeHtml(row.typeMateriaal || ''); } },
+      { label: 'Eenheid', render: function (row) { return APP.escapeHtml(row.eenheid || ''); } }
+    ].concat(extraColumns || []), lines || []);
+  }
 
-    if (fullRender) {
-      showBusy('Gegevens laden...');
+  function renderDeliveriesTab(data) {
+    var items = data && (data.deliveryGroups || data.items) || [];
+    var summary = data && data.summary || {};
+
+    return renderMetricsFromSummary(summary, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'klaargezet', label: 'Klaargezet' },
+      { key: 'meegegeven', label: 'Meegegeven' },
+      { key: 'vandaag', label: 'Vandaag' }
+    ]) + '<div class="split"><section class="card section-pad"><h3 class="section-title">Beleveringsmomenten komende 7 dagen</h3><p class="section-subtitle">Gesorteerd van eerstvolgende naar later.</p>' +
+      renderSelectableTable({
+        rows: items,
+        getKey: function (row) { return row.deliveryId + '|' + row.techniekerCode; },
+        emptyMessage: 'Geen leveringen gevonden.',
+        columns: [
+          { label: 'Technieker', render: function (row) { return APP.escapeHtml(row.techniekerNaam || row.techniekerCode); } },
+          { label: 'Klaar tegen', render: function (row) { return APP.escapeHtml((row.datumIso || '') + ' ' + (row.windowLabel || row.startTijd || '')); } },
+          { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+          { label: 'Lijnen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.lineCount)); } },
+          { label: 'Delta', className: 'num', render: function (row) { return row.hasDelta ? 'Ja' : 'Nee'; } }
+        ]
+      }) + '</section>' + renderDeliveryDetail(items) + '</div>';
+  }
+
+  function renderDeliveryDetail(items) {
+    var selected = (items || []).find(function (row) {
+      return APP.safeText(row.deliveryId + '|' + row.techniekerCode) === state.selectedKey;
+    });
+
+    if (!selected) {
+      return renderDetailCard('Details', APP.renderEmptyState('Kies een belevering om de lijnen te bekijken.'));
     }
 
-    try {
-      console.log('START getWarehouseData');
-      const warehouse = await new Promise((resolve, reject) => {
-        google.script.run
-          .withSuccessHandler(resolve)
-          .withFailureHandler(reject)
-          .getWarehouseData(window.SESSION_ID);
-      });
-      console.log('OK getWarehouseData', warehouse);
+    return renderDetailCard('Details belevering',
+      '<div class="stack"><div class="banner banner-info">Afgevinkt = volledig in karretje en voorzien = gevraagd. Niet afgevinkt = lager voorzien aantal + reden verplicht.</div>' +
+      renderLinesTable(selected.lines || [], [
+        { label: 'Gevraagd', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.gevraagdAantal)); } },
+        { label: 'Voorzien', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.voorzienAantal)); } },
+        { label: 'Ontvangen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.ontvangenAantal)); } },
+        { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+        { label: 'Reden delta', render: function (row) { return APP.escapeHtml(row.redenDelta || ''); } }
+      ]) + '</div>');
+  }
 
-      console.log('START getReceiptsData');
-      const receipts = await new Promise((resolve, reject) => {
-        google.script.run
-          .withSuccessHandler(resolve)
-          .withFailureHandler(reject)
-          .getReceiptsData(window.SESSION_ID);
-      });
-      console.log('OK getReceiptsData', receipts);
+  function renderStandardTableTab(title, dataRows, summary, metricKeys, columns) {
+    return renderMetricsFromSummary(summary, metricKeys) +
+      '<section class="card section-pad"><h3 class="section-title">' + APP.escapeHtml(title) + '</h3>' +
+      APP.renderSimpleTable(columns, dataRows) +
+      '</section>';
+  }
 
-      console.log('START getReturnsData');
-      const returnsData = await new Promise((resolve, reject) => {
-        google.script.run
-          .withSuccessHandler(resolve)
-          .withFailureHandler(reject)
-          .getReturnsData(window.SESSION_ID);
-      });
-      console.log('OK getReturnsData', returnsData);
+  function renderReceiptsTab(data) {
+    var items = data && (data.receipts || data.items) || [];
+    return renderStandardTableTab('Ontvangsten', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'ingediend', label: 'Ingediend' },
+      { key: 'goedgekeurd', label: 'Goedgekeurd' },
+      { key: 'deltaLijnen', label: 'Delta lijnen' }
+    ], [
+      { label: 'OntvangstID', render: function (row) { return APP.escapeHtml(row.receiptId); } },
+      { label: 'Type', render: function (row) { return APP.escapeHtml(row.typeMateriaal || ''); } },
+      { label: 'Leverancier', render: function (row) { return APP.escapeHtml(row.leverancier || ''); } },
+      { label: 'Bestelbon', render: function (row) { return APP.escapeHtml(row.bestelbonNr || ''); } },
+      { label: 'Documentdatum', render: function (row) { return APP.escapeHtml(row.documentDatum || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Lijnen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.lineCount)); } }
+    ]);
+  }
 
-      console.log('START getNeedIssueData');
-      const needIssues = await new Promise((resolve, reject) => {
-        google.script.run
-          .withSuccessHandler(resolve)
-          .withFailureHandler(reject)
-          .getNeedIssueData(window.SESSION_ID);
-      });
-      console.log('OK getNeedIssueData', needIssues);
+  function renderReturnsTab(data) {
+    var items = data && (data.returns || data.items) || [];
+    return renderStandardTableTab('Retouren', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'ingediend', label: 'Ingediend' },
+      { key: 'goedgekeurd', label: 'Goedgekeurd' },
+      { key: 'busNaarCentraal', label: 'Bus → centraal' }
+    ], [
+      { label: 'RetourID', render: function (row) { return APP.escapeHtml(row.returnId); } },
+      { label: 'Flow', render: function (row) { return APP.escapeHtml(row.flowType); } },
+      { label: 'Van', render: function (row) { return APP.escapeHtml(row.vanLocatie); } },
+      { label: 'Naar', render: function (row) { return APP.escapeHtml(row.naarLocatie); } },
+      { label: 'Technieker', render: function (row) { return APP.escapeHtml(row.techniekerCode || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } }
+    ]);
+  }
 
-      console.log('START getAutoNeedProposals');
-      const proposals = await new Promise((resolve, reject) => {
-        google.script.run
-          .withSuccessHandler(resolve)
-          .withFailureHandler(reject)
-          .getAutoNeedProposals(withSession({}));
-      });
-      console.log('OK getAutoNeedProposals', proposals);
+  function renderNeedIssuesTab(data) {
+    var items = data && (data.needIssues || data.items) || [];
+    return renderStandardTableTab('Behoefte-uitgiftes', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'ingediend', label: 'Ingediend' },
+      { key: 'geboekt', label: 'Geboekt' },
+      { key: 'naarTechnieker', label: 'Naar technieker' }
+    ], [
+      { label: 'ID', render: function (row) { return APP.escapeHtml(row.needIssueId); } },
+      { label: 'Doeltype', render: function (row) { return APP.escapeHtml(row.targetType); } },
+      { label: 'Doel', render: function (row) { return APP.escapeHtml(row.targetName || row.targetCode); } },
+      { label: 'Datum', render: function (row) { return APP.escapeHtml(row.documentDatum || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } }
+    ]);
+  }
 
-      APP_STATE.warehouseData = warehouse || {};
-      APP_STATE.receiptsData = receipts || {};
-      APP_STATE.returnsData = returnsData || {};
-      APP_STATE.needIssueData = needIssues || {};
-      APP_STATE.autoNeedProposalPayload = proposals || { proposals: [] };
+  function renderCentralTab(data) {
+    var items = data && (data.stock || data.items) || [];
+    return renderStandardTableTab('Centraal magazijn', items, data && data.summary || {}, [
+      { key: 'artikels', label: 'Artikels' },
+      { key: 'totaalAantal', label: 'Totaal aantal' },
+      { key: 'grabbelAantal', label: 'Grabbel' },
+      { key: 'behoefteAantal', label: 'Behoefte' },
+      { key: 'artikelenMetVoorraad', label: 'Met voorraad' }
+    ], [
+      { label: 'ArtikelNr', render: function (row) { return APP.escapeHtml(row.artikelCode); } },
+      { label: 'Artikel', render: function (row) { return APP.escapeHtml(row.artikelOmschrijving); } },
+      { label: 'Type', render: function (row) { return APP.escapeHtml(row.typeMateriaal || ''); } },
+      { label: 'Eenheid', render: function (row) { return APP.escapeHtml(row.eenheid || ''); } },
+      { label: 'Voorraad', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.voorraadCentraal)); } },
+      { label: 'Laatste mutatie', render: function (row) { return APP.escapeHtml(row.laatsteMutatie || ''); } }
+    ]);
+  }
 
-      renderAllSections_();
-      switchTab(APP_STATE.activeTab || 'deliveries');
-    } catch (err) {
-      console.error('LOAD ERROR', err);
-      showError(extractErrorMessage(err, 'Fout bij laden gegevens.'), true);
-    } finally {
-      if (fullRender) {
-        hideBusy();
+  function renderNotificationsTab(data) {
+    var items = data && data.items || [];
+    var html = renderStandardTableTab('Meldingen', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'gelezen', label: 'Gelezen' },
+      { key: 'verwerkt', label: 'Verwerkt' },
+      { key: 'gesloten', label: 'Gesloten' }
+    ], [
+      { label: 'Titel', render: function (row) { return APP.escapeHtml(row.titel); } },
+      { label: 'Bericht', render: function (row) { return APP.escapeHtml(row.bericht); } },
+      { label: 'Type', render: function (row) { return APP.escapeHtml(row.type || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Aangemaakt', render: function (row) { return APP.escapeHtml(row.aangemaaktOp || ''); } }
+    ]);
+
+    return html.replace('<h3 class="section-title">Meldingen</h3>', '<div class="toolbar"><div><h3 class="section-title">Meldingen</h3></div><div class="toolbar-right"><button class="btn btn-light" id="markAllNotificationsReadBtn" type="button">Alles als gelezen</button></div></div>');
+  }
+
+  function renderAuditTab(data) {
+    var items = data && (data.audit || data.items) || [];
+    return renderStandardTableTab('Audit', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'uniekeActies', label: 'Acties' },
+      { key: 'uniekeActoren', label: 'Actoren' },
+      { key: 'uniekeDocumenten', label: 'Documenten' }
+    ], [
+      { label: 'Actie', render: function (row) { return APP.escapeHtml(row.actie); } },
+      { label: 'Actor', render: function (row) { return APP.escapeHtml(row.actorNaam || row.actorCode); } },
+      { label: 'Rol', render: function (row) { return APP.escapeHtml(row.actorRol || ''); } },
+      { label: 'Document', render: function (row) { return APP.escapeHtml((row.documentType || '') + ' / ' + (row.documentId || '')); } },
+      { label: 'Aangemaakt', render: function (row) { return APP.escapeHtml(row.aangemaaktOp || ''); } }
+    ]);
+  }
+
+  function renderBusCountsTab(data) {
+    var items = data && (data.busCounts || data.items) || [];
+    return renderStandardTableTab('Bustellingen', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'ingediend', label: 'Ingediend' },
+      { key: 'goedgekeurd', label: 'Goedgekeurd' },
+      { key: 'afwijkingen', label: 'Afwijkingen' }
+    ], [
+      { label: 'ID', render: function (row) { return APP.escapeHtml(row.busCountId); } },
+      { label: 'Technieker', render: function (row) { return APP.escapeHtml(row.techniekerNaam || row.techniekerCode); } },
+      { label: 'Scope', render: function (row) { return APP.escapeHtml(row.scopeType || ''); } },
+      { label: 'Datum', render: function (row) { return APP.escapeHtml(row.documentDatum || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Afwijkingen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.afwijkingen)); } }
+    ]);
+  }
+
+  function renderCentralCountsTab(data) {
+    var items = data && (data.centralCounts || data.items) || [];
+    return renderStandardTableTab('Centrale tellingen', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'ingediend', label: 'Ingediend' },
+      { key: 'goedgekeurd', label: 'Goedgekeurd' },
+      { key: 'afwijkingen', label: 'Afwijkingen' }
+    ], [
+      { label: 'ID', render: function (row) { return APP.escapeHtml(row.centralCountId); } },
+      { label: 'Scope', render: function (row) { return APP.escapeHtml(row.scopeType || ''); } },
+      { label: 'Datum', render: function (row) { return APP.escapeHtml(row.documentDatum || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Afwijkingen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.afwijkingen)); } }
+    ]);
+  }
+
+  function renderStockRiskTab(data) {
+    var articleScores = data && data.articleScores || [];
+    var technicianScores = data && data.technicianScores || [];
+    var summary = data && data.summary || {};
+
+    return APP.renderMetricCards([
+      { label: 'Artikel alerts', value: APP.formatNumber(summary.articleRiskCount || 0) },
+      { label: 'Centrale tellingen', value: APP.formatNumber(summary.centralCountSuggestionCount || 0) },
+      { label: 'Recurrente bustellingen', value: APP.formatNumber(summary.recurringBusCountSuggestionCount || 0) },
+      { label: 'Top artikelscore', value: APP.formatNumber(summary.topArticleScore || 0) },
+      { label: 'Top techniekerscore', value: APP.formatNumber(summary.topTechnicianScore || 0) }
+    ]) + '<div class="split"><section class="card section-pad"><h3 class="section-title">Artikelscores</h3>' +
+    APP.renderSimpleTable([
+      { label: 'ArtikelNr', render: function (row) { return APP.escapeHtml(row.artikelCode); } },
+      { label: 'Artikel', render: function (row) { return APP.escapeHtml(row.artikelOmschrijving); } },
+      { label: 'Type', render: function (row) { return APP.escapeHtml(row.typeMateriaal || ''); } },
+      { label: 'Score', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.score)); } }
+    ], articleScores) +
+    '</section><section class="card section-pad"><h3 class="section-title">Techniekerscores</h3>' +
+    APP.renderSimpleTable([
+      { label: 'Technieker', render: function (row) { return APP.escapeHtml(row.techniekerNaam || row.techniekerCode); } },
+      { label: 'Code', render: function (row) { return APP.escapeHtml(row.techniekerCode); } },
+      { label: 'Score', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.score)); } }
+    ], technicianScores) +
+    '</section></div>';
+  }
+
+  function renderRecurringBusCountsTab(data) {
+    var items = data && data.requests || [];
+    return renderStandardTableTab('Recurrente bustellingen', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'aangemaakt', label: 'Aangemaakt' },
+      { key: 'gesloten', label: 'Gesloten' },
+      { key: 'pendingCandidates', label: 'Pending kandidaten' }
+    ], [
+      { label: 'ID', render: function (row) { return APP.escapeHtml(row.recurringBusCountId); } },
+      { label: 'Technieker', render: function (row) { return APP.escapeHtml(row.techniekerNaam || row.techniekerCode); } },
+      { label: 'Score', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.score)); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Linked bustelling', render: function (row) { return APP.escapeHtml(row.linkedBusCountId || ''); } }
+    ]);
+  }
+
+  function renderConsumptionImportsTab(data) {
+    var items = data && (data.batches || data.items) || [];
+    return renderStandardTableTab('Verbruiksimport', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'verwerkt', label: 'Verwerkt' },
+      { key: 'gesloten', label: 'Gesloten' }
+    ], [
+      { label: 'Batch', render: function (row) { return APP.escapeHtml(row.importBatchId); } },
+      { label: 'Bron', render: function (row) { return APP.escapeHtml(row.sourceName || row.sourceType || ''); } },
+      { label: 'Datum', render: function (row) { return APP.escapeHtml(row.documentDatum || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Ruwe lijnen', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.rawLineCount)); } },
+      { label: 'Gegroepeerd', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.groupedLineCount)); } }
+    ]);
+  }
+
+  function renderConsumptionProcessesTab(data) {
+    var items = data && (data.batches || data.items) || [];
+    return renderStandardTableTab('Verbruiksverwerking', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'klaar', label: 'Klaar' },
+      { key: 'geboekt', label: 'Geboekt' }
+    ], [
+      { label: 'Batch', render: function (row) { return APP.escapeHtml(row.processBatchId); } },
+      { label: 'Importbatch', render: function (row) { return APP.escapeHtml(row.importBatchId || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Warnings', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.warningCount)); } },
+      { label: 'Errors', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.errorCount)); } }
+    ]);
+  }
+
+  function renderConsumptionBookingsTab(data) {
+    var items = data && (data.bookings || data.items) || [];
+    return renderStandardTableTab('Verbruiksboekingen', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'geboekt', label: 'Geboekt' },
+      { key: 'warnings', label: 'Warnings' },
+      { key: 'errors', label: 'Errors' }
+    ], [
+      { label: 'Boeking', render: function (row) { return APP.escapeHtml(row.bookingId); } },
+      { label: 'Technieker', render: function (row) { return APP.escapeHtml(row.techniekerNaam || row.techniekerCode); } },
+      { label: 'Werkorder', render: function (row) { return APP.escapeHtml(row.werkorderNr || ''); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Validatie', render: function (row) { return APP.renderStatusBadge(row.validationStatus); } },
+      { label: 'Aantal', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.totaalAantal)); } }
+    ]);
+  }
+
+  function renderConsumptionProposalsTab(data) {
+    var items = data && (data.proposals || data.items) || [];
+    return renderStandardTableTab('Verbruiksvoorstellen', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'open', label: 'Open' },
+      { key: 'goedgekeurd', label: 'Goedgekeurd' },
+      { key: 'gematerialiseerd', label: 'Gematerialiseerd' },
+      { key: 'totaalSuggestedQty', label: 'Suggested qty' }
+    ], [
+      { label: 'Voorstel', render: function (row) { return APP.escapeHtml(row.proposalId); } },
+      { label: 'Doel', render: function (row) { return APP.escapeHtml(row.targetName || row.targetCode); } },
+      { label: 'Doeltype', render: function (row) { return APP.escapeHtml(row.targetType); } },
+      { label: 'Status', render: function (row) { return APP.renderStatusBadge(row.status); } },
+      { label: 'Linked document', render: function (row) { return APP.escapeHtml((row.linkedDocumentType || '') + ' ' + (row.linkedDocumentId || '')); } },
+      { label: 'Suggested', className: 'num', render: function (row) { return APP.escapeHtml(APP.formatNumber(row.totaalSuggestedQty)); } }
+    ]);
+  }
+
+  function renderMaterialCatalogTab(data) {
+    var items = data && (data.catalog || data.items) || [];
+    return renderStandardTableTab('Volledige artikellijst', items, data && data.summary || {}, [
+      { key: 'totaal', label: 'Totaal' },
+      { key: 'grabbel', label: 'Grabbel' },
+      { key: 'behoefte', label: 'Behoefte' },
+      { key: 'leveranciers', label: 'Leveranciers' }
+    ], [
+      { label: 'ArtikelNr', render: function (row) { return APP.escapeHtml(row.artikelCode); } },
+      { label: 'Artikel', render: function (row) { return APP.escapeHtml(row.artikelOmschrijving); } },
+      { label: 'Type', render: function (row) { return APP.escapeHtml(row.typeMateriaal || ''); } },
+      { label: 'Eenheid', render: function (row) { return APP.escapeHtml(row.eenheid || ''); } },
+      { label: 'Leverancier', render: function (row) { return APP.escapeHtml(row.leverancier || ''); } },
+      { label: 'Bron', render: function (row) { return APP.escapeHtml(row.bron || ''); } }
+    ]);
+  }
+
+  function renderTab(tabKey, data) {
+    if (tabKey === TAB_KEYS.deliveries) return renderDeliveriesTab(data);
+    if (tabKey === TAB_KEYS.receipts) return renderReceiptsTab(data);
+    if (tabKey === TAB_KEYS.returns) return renderReturnsTab(data);
+    if (tabKey === TAB_KEYS.needIssues) return renderNeedIssuesTab(data);
+    if (tabKey === TAB_KEYS.central) return renderCentralTab(data);
+    if (tabKey === TAB_KEYS.notifications) return renderNotificationsTab(data);
+    if (tabKey === TAB_KEYS.audit) return renderAuditTab(data);
+    if (tabKey === TAB_KEYS.busCounts) return renderBusCountsTab(data);
+    if (tabKey === TAB_KEYS.centralCounts) return renderCentralCountsTab(data);
+    if (tabKey === TAB_KEYS.stockRisk) return renderStockRiskTab(data);
+    if (tabKey === TAB_KEYS.recurringBusCounts) return renderRecurringBusCountsTab(data);
+    if (tabKey === TAB_KEYS.consumptionImports) return renderConsumptionImportsTab(data);
+    if (tabKey === TAB_KEYS.consumptionProcesses) return renderConsumptionProcessesTab(data);
+    if (tabKey === TAB_KEYS.consumptionBookings) return renderConsumptionBookingsTab(data);
+    if (tabKey === TAB_KEYS.consumptionProposals) return renderConsumptionProposalsTab(data);
+    if (tabKey === TAB_KEYS.materialCatalog) return renderMaterialCatalogTab(data);
+    return APP.renderEmptyState('Tab niet beschikbaar.');
+  }
+
+  function bindTabSpecificEvents(tabKey) {
+    var panel = document.getElementById(getTabPanelId(tabKey));
+    if (!panel) return;
+
+    if (tabKey === TAB_KEYS.deliveries) {
+      bindSelectableRows(panel);
+    }
+
+    if (tabKey === TAB_KEYS.notifications) {
+      var markAllBtn = document.getElementById('markAllNotificationsReadBtn');
+      if (markAllBtn) {
+        markAllBtn.addEventListener('click', async function () {
+          try {
+            await APP.api('markAllNotificationsRead', {}, {
+              useBusy: true,
+              busyTitle: 'Meldingen bijwerken…',
+              busySubtitle: 'Alles wordt als gelezen gemarkeerd.'
+            });
+            state.data.notifications = null;
+            await refreshCurrentTab(true);
+            setBanner('Alle meldingen zijn als gelezen gemarkeerd.', 'success');
+          } catch (err) {
+            setBanner(err.message || 'Meldingen konden niet bijgewerkt worden.', 'error');
+          }
+        });
       }
     }
   }
 
-  function manualRefresh() {
-    clearError();
-    loadAll(true);
-  }
+  async function renderActiveTab(forceReload) {
+    Array.prototype.slice.call(document.querySelectorAll('#dashboardTabs .tab-btn')).forEach(function (button) {
+      button.classList.toggle('is-active', APP.safeText(button.getAttribute('data-tab')) === state.activeTab);
+    });
 
-  function initSharedShell() {
-    initActorInputShared();
-    initDefaultDatesShared();
-    applyPagePermissions_();
+    Array.prototype.slice.call(document.querySelectorAll('#dashboardPanels > [data-tab]')).forEach(function (panel) {
+      panel.hidden = APP.safeText(panel.getAttribute('data-tab')) !== state.activeTab;
+    });
 
-    if (typeof onReturnModeChange === 'function') {
-      onReturnModeChange();
+    var panel = document.getElementById(getTabPanelId(state.activeTab));
+    if (!panel) return;
+
+    panel.innerHTML = APP.renderLoadingState('Gegevens laden…');
+
+    try {
+      var data = await ensureTabData(state.activeTab, !!forceReload);
+      panel.innerHTML = renderTab(state.activeTab, data || {});
+      bindTabSpecificEvents(state.activeTab);
+    } catch (err) {
+      panel.innerHTML = '<div class="banner banner-error">' + APP.escapeHtml(err.message || 'Laden mislukt.') + '</div>';
     }
-
-    APP_STATE.activeTab = APP_STATE.activeTab || 'deliveries';
-    loadAll(true);
   }
 
-  setInterval(function () {
-    if (document.visibilityState !== 'visible') return;
+  async function refreshCurrentTab(forceReload) {
+    await renderActiveTab(!!forceReload);
+  }
 
-    const secondsSinceInteraction = (Date.now() - APP_STATE.lastUserInteractionAt) / 1000;
-    if (secondsSinceInteraction < 20) return;
+  async function initSharedDashboard() {
+    var appRoot = root();
+    if (!appRoot) return;
 
-    loadAll(false);
-  }, 30000);
+    appRoot.className = 'app-shell';
+    APP.setHtml(appRoot, renderShellFrame());
+    bindShellEvents();
+
+    try {
+      await preloadBaseData();
+      await renderActiveTab(false);
+    } catch (err) {
+      setBanner(err.message || 'Dashboard kon niet geladen worden.', 'error');
+    }
+  }
+
+  APP.sharedState = state;
+  APP.initSharedDashboard = initSharedDashboard;
+  APP.refreshCurrentTab = refreshCurrentTab;
+  APP.ensureTabData = ensureTabData;
+  APP.selectDashboardKey = selectKey;
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSharedDashboard);
+  } else {
+    initSharedDashboard();
+  }
+
+})(window, document);

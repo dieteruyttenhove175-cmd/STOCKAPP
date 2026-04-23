@@ -1,27 +1,124 @@
 <!DOCTYPE html>
 <html>
-  <?!= include('_shared_shell_head', model) ?>
+  <head>
+    <?!= include('_shared_shell_head', model) ?>
+    <script>
+      window.BOOTSTRAP_MODEL = <?= JSON.stringify(model || {}) ?>;
+      window.BOOTSTRAP_SESSION_ID = <?= JSON.stringify((model && (model.bootstrapSessionId || model.currentSessionId || model.sessionId)) || '') ?>;
+      window.CURRENT_SESSION_ID = window.BOOTSTRAP_SESSION_ID;
+    </script>
+  </head>
+  <body class="<?= (model && model.bodyClass) || 'page-index' ?>">
+    <div id="techApp" class="app-shell app-shell-tech">
+      <div class="app-container">
+        <header class="app-page-header">
+          <div class="app-page-title-wrap">
+            <h1 class="app-page-title"><?= (model && model.pageTitle) || 'Technieker dashboard' ?></h1>
+            <p class="app-page-subtitle"><?= (model && model.pageSubtitle) || 'Overzicht van beleveringen, grabbelbestellingen en meldingen.' ?></p>
+          </div>
+          <div class="app-page-meta">
+            <span class="role-badge"><?= (model && (model.currentUserRole || model.pageRole)) || 'technician' ?></span>
+            <? if (model && model.currentUserName) { ?>
+              <span class="chip"><?= model.currentUserName ?></span>
+            <? } ?>
+            <? if (model && (model.techRef || model.selectedTechnicianCode)) { ?>
+              <span class="chip">Ref <?= (model.techRef || model.selectedTechnicianCode) ?></span>
+            <? } ?>
+          </div>
+        </header>
 
-  <body>
-    <div class="wrap">
-      <?!= include('_tech_dashboard_header', model) ?>
-
-      <?!= include('_tech_new_order', model) ?>
-      <?!= include('_tech_ordered', model) ?>
-      <?!= include('_tech_notifications', model) ?>
-      <?!= include('_tech_buscounts', model) ?>
-      <?!= include('_tech_mobile_requests', model) ?>
+        <section class="card section-pad">
+          <div class="loading-state">Techniekerdashboard laden…</div>
+        </section>
+      </div>
     </div>
 
-    <?!= include('_shared_common_js', model) ?>
-    <?!= include('_tech_orders_js', model) ?>
-    <?!= include('_tech_notifications_js', model) ?>
-    <?!= include('_tech_buscounts_js', model) ?>
-    <?!= include('_tech_mobile_requests_js', model) ?>
-    <?!= include('_tech_loader_js', model) ?>
-
+    <script><?!= include('_shared_common_js', model) ?></script>
+    <script><?!= include('_tech_loader_js', model) ?></script>
     <script>
-      initTechnicianShell();
+      (function (window, document) {
+        'use strict';
+
+        var APP = window.STOCKAPP = window.STOCKAPP || {};
+        var MODEL = APP.model || window.BOOTSTRAP_MODEL || {};
+
+        if (APP.indexPageInitialized) return;
+        APP.indexPageInitialized = true;
+
+        function validateTechnicianContext() {
+          var techRef = APP.safeText(
+            MODEL.techRef ||
+            MODEL.selectedTechnicianCode ||
+            MODEL.currentUserCode
+          );
+
+          if (!techRef) {
+            throw new Error('Geen techniekerreferentie gevonden voor dit dashboard.');
+          }
+
+          return techRef;
+        }
+
+        function syncBodyState() {
+          var body = document.body;
+          if (!body) return;
+
+          body.classList.add('page-index');
+
+          var techRef = APP.safeText(
+            MODEL.techRef ||
+            MODEL.selectedTechnicianCode ||
+            MODEL.currentUserCode
+          );
+
+          if (techRef) {
+            body.setAttribute('data-tech-ref', techRef);
+          }
+        }
+
+        function exposeIndexMeta() {
+          var techRef = APP.safeText(
+            MODEL.techRef ||
+            MODEL.selectedTechnicianCode ||
+            MODEL.currentUserCode
+          );
+
+          window.TECH_APP_META = {
+            techRef: techRef,
+            pageRole: APP.safeText(MODEL.pageRole || 'technician'),
+            currentUserName: APP.safeText(MODEL.currentUserName || ''),
+            currentUserRole: APP.safeText(MODEL.currentUserRole || '')
+          };
+        }
+
+        function initIndexPage() {
+          validateTechnicianContext();
+          syncBodyState();
+          exposeIndexMeta();
+
+          if (typeof APP.initTechDashboard === 'function') {
+            APP.initTechDashboard();
+          }
+        }
+
+        try {
+          initIndexPage();
+        } catch (err) {
+          var root = document.getElementById('techApp');
+          if (root) {
+            root.innerHTML = [
+              '<div class="app-container">',
+                '<section class="card section-pad">',
+                  '<div class="banner banner-error">',
+                    APP.escapeHtml(err.message || 'Techniekerdashboard kon niet geladen worden.'),
+                  '</div>',
+                '</section>',
+              '</div>'
+            ].join('');
+          }
+        }
+
+      })(window, document);
     </script>
   </body>
 </html>

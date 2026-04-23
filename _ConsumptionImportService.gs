@@ -1,489 +1,551 @@
 /* =========================================================
-   44_ConsumptionImportService.gs — verbruiksimport
-   Google Drive bestand -> VerbruikImportRuns / VerbruikImportRaw
+   44_ConsumptionImportService.gs
+   Refactor: consumption import service
+   Doel:
+   - ruwe verbruiksregels uit Excel/CSV normaliseren
+   - lijnen groeperen per technieker, datum en artikel
+   - previewlaag voor importcontrole
+   - importbatch bewaren voor verdere verwerking
    ========================================================= */
 
-function makeConsumptionImportRunId() {
-  return makeStampedId('VRUN');
+/* ---------------------------------------------------------
+   Tabs / fallbacks
+   --------------------------------------------------------- */
+
+function getConsumptionImportBatchTab_() {
+  return TABS.CONSUMPTION_IMPORT_BATCHES || 'VerbruiksImportBatches';
 }
 
-function makeConsumptionImportLogId() {
-  return makeStampedId('VLOG');
+function getConsumptionImportLineTab_() {
+  return TABS.CONSUMPTION_IMPORT_LINES || 'VerbruiksImportLijnen';
+}
+
+function getConsumptionImportStatusOpen_() {
+  if (typeof CONSUMPTION_IMPORT_STATUS !== 'undefined' && CONSUMPTION_IMPORT_STATUS && CONSUMPTION_IMPORT_STATUS.OPEN) {
+    return CONSUMPTION_IMPORT_STATUS.OPEN;
+  }
+  return 'Open';
+}
+
+function getConsumptionImportStatusProcessed_() {
+  if (typeof CONSUMPTION_IMPORT_STATUS !== 'undefined' && CONSUMPTION_IMPORT_STATUS && CONSUMPTION_IMPORT_STATUS.PROCESSED) {
+    return CONSUMPTION_IMPORT_STATUS.PROCESSED;
+  }
+  return 'Verwerkt';
+}
+
+function getConsumptionImportStatusClosed_() {
+  if (typeof CONSUMPTION_IMPORT_STATUS !== 'undefined' && CONSUMPTION_IMPORT_STATUS && CONSUMPTION_IMPORT_STATUS.CLOSED) {
+    return CONSUMPTION_IMPORT_STATUS.CLOSED;
+  }
+  return 'Gesloten';
+}
+
+function makeConsumptionImportBatchId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'CIB-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
+
+function makeConsumptionImportLineId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'CIL-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
 }
 
 /* ---------------------------------------------------------
-   Config
+   Mapping
    --------------------------------------------------------- */
 
-function getConsumptionImportConfigMap() {
-  const rows = readObjectsSafe(TABS.CONSUMPTION_IMPORT_CONFIG);
-  const map = {};
-
-  rows.forEach(row => {
-    const key = safeText(row.Sleutel || row.Key);
-    if (!key) return;
-    map[key] = safeText(row.Waarde || row.Value);
-  });
-
-  return map;
-}
-
-function getConsumptionImportConfigValue(key, fallbackValue) {
-  const map = getConsumptionImportConfigMap();
-  return map[key] !== undefined && map[key] !== '' ? map[key] : fallbackValue;
-}
-
-/* ---------------------------------------------------------
-   Logging
-   --------------------------------------------------------- */
-
-function writeConsumptionImportLog(runId, level, message, details) {
-  appendObjects(TABS.CONSUMPTION_IMPORT_LOG, [{
-    LogID: makeConsumptionImportLogId(),
-    RunID: safeText(runId),
-    Tijdstip: nowStamp(),
-    Niveau: safeText(level),
-    Bericht: safeText(message),
-    Details: typeof details === 'object' ? JSON.stringify(details) : safeText(details)
-  }]);
-}
-
-/* ---------------------------------------------------------
-   Run helpers
-   --------------------------------------------------------- */
-
-function startConsumptionImportRun(sourceFile) {
-  const runId = makeConsumptionImportRunId();
-
-  appendObjects(TABS.CONSUMPTION_IMPORT_RUNS, [{
-    RunID: runId,
-    BronBestand: sourceFile ? safeText(sourceFile.getName()) : '',
-    BronVersie: sourceFile ? safeText(sourceFile.getLastUpdated()) : '',
-    ImportStart: nowStamp(),
-    ImportEinde: '',
-    Status: IMPORT_RUN_STATUS.STARTED,
-    AantalRuweLijnen: 0,
-    AantalGeldigeLijnen: 0,
-    AantalFoutLijnen: 0,
-    AantalDubbeleLijnen: 0,
-    Opmerking: ''
-  }]);
-
-  return runId;
-}
-
-function finishConsumptionImportRun(runId, updates) {
-  const id = safeText(runId);
-  const sheet = getSheetOrThrow(TABS.CONSUMPTION_IMPORT_RUNS);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) throw new Error('Tab VerbruikImportRuns is leeg.');
-
-  const headers = values[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  let updated = false;
-
-  for (let i = 1; i < values.length; i++) {
-    if (safeText(values[i][col['RunID']]) !== id) continue;
-
-    Object.keys(updates || {}).forEach(field => {
-      if (col[field] !== undefined) {
-        values[i][col[field]] = updates[field];
-      }
-    });
-
-    if (col['ImportEinde'] !== undefined) {
-      values[i][col['ImportEinde']] = nowStamp();
-    }
-
-    updated = true;
-    break;
-  }
-
-  if (!updated) throw new Error('ImportRun niet gevonden.');
-
-  if (values.length > 1) {
-    sheet.getRange(2, 1, values.length - 1, values[0].length).setValues(values.slice(1));
-  }
-
-  return { success: true };
-}
-
-/* ---------------------------------------------------------
-   Drive bronbestand
-   --------------------------------------------------------- */
-
-function getConsumptionSourceDriveFile() {
-  const sourceFileId = safeText(getConsumptionImportConfigValue('ImportBronBestandId', ''));
-  const sourceFileName = safeText(getConsumptionImportConfigValue('ImportBestandsNaam', ''));
-
-  if (sourceFileId) {
-    return DriveApp.getFileById(sourceFileId);
-  }
-
-  if (sourceFileName) {
-    const files = DriveApp.getFilesByName(sourceFileName);
-    if (files.hasNext()) return files.next();
-  }
-
-  throw new Error('Geen bronbestand gevonden. Vul ImportBronBestandId of ImportBestandsNaam in.');
-}
-
-function isGoogleSpreadsheetMimeType(mimeType) {
-  return safeText(mimeType) === 'application/vnd.google-apps.spreadsheet';
-}
-
-function isExcelMimeType(mimeType) {
-  const mime = safeText(mimeType);
-  return mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      || mime === 'application/vnd.ms-excel';
-}
-
-function openConsumptionSourceSpreadsheetFromDrive(file) {
-  if (!file) throw new Error('Bronbestand ontbreekt.');
-
-  const mimeType = safeText(file.getMimeType());
-
-  if (isGoogleSpreadsheetMimeType(mimeType)) {
-    return {
-      spreadsheet: SpreadsheetApp.openById(file.getId()),
-      tempFileId: ''
-    };
-  }
-
-  if (isExcelMimeType(mimeType)) {
-    if (typeof Drive === 'undefined' || !Drive.Files || !Drive.Files.copy) {
-      throw new Error('Advanced Drive Service is niet actief. Activeer Drive API advanced service voor XLSX-conversie.');
-    }
-
-    const tempName = `tmp_verbruik_import_${Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMdd_HHmmss')}`;
-
-    const copied = Drive.Files.copy(
-      {
-        title: tempName,
-        mimeType: 'application/vnd.google-apps.spreadsheet'
-      },
-      file.getId()
-    );
-
-    const tempFileId = safeText(copied.id || copied.fileId);
-    if (!tempFileId) {
-      throw new Error('Tijdelijke conversie naar Google Sheet mislukt.');
-    }
-
-    return {
-      spreadsheet: SpreadsheetApp.openById(tempFileId),
-      tempFileId: tempFileId
-    };
-  }
-
-  throw new Error(`Niet ondersteund bronbestandstype: ${mimeType}`);
-}
-
-function cleanupTemporaryImportedSpreadsheet(tempFileId) {
-  const id = safeText(tempFileId);
-  if (!id) return;
-
-  try {
-    DriveApp.getFileById(id).setTrashed(true);
-  } catch (e) {
-    // niet blokkeren
-  }
-}
-
-/* ---------------------------------------------------------
-   Brondata lezen
-   --------------------------------------------------------- */
-
-function getConsumptionSourceSheet(spreadsheet) {
-  const configuredName = safeText(getConsumptionImportConfigValue('ImportSheetNaam', ''));
-
-  if (configuredName) {
-    const namedSheet = spreadsheet.getSheetByName(configuredName);
-    if (!namedSheet) {
-      throw new Error(`Bronblad niet gevonden: ${configuredName}`);
-    }
-    return namedSheet;
-  }
-
-  const firstSheet = spreadsheet.getSheets()[0];
-  if (!firstSheet) {
-    throw new Error('Geen werkblad gevonden in bronbestand.');
-  }
-
-  return firstSheet;
-}
-
-function getSourceHeaderAliases() {
+function mapConsumptionImportBatch(row) {
   return {
-    documentDatum: safeText(getConsumptionImportConfigValue('KolomDocumentDatum', 'DocumentDatum')),
-    techniekerCode: safeText(getConsumptionImportConfigValue('KolomTechniekerCode', 'TechniekerCode')),
-    techniekerNaam: safeText(getConsumptionImportConfigValue('KolomTechniekerNaam', 'TechniekerNaam')),
-    werfRef: safeText(getConsumptionImportConfigValue('KolomWerfRef', 'WerfRef')),
-    artikelCode: safeText(getConsumptionImportConfigValue('KolomArtikelCode', 'ArtikelCode')),
-    artikelOmschrijving: safeText(getConsumptionImportConfigValue('KolomArtikelOmschrijving', 'ArtikelOmschrijving')),
-    aantal: safeText(getConsumptionImportConfigValue('KolomAantal', 'Aantal')),
-    eenheid: safeText(getConsumptionImportConfigValue('KolomEenheid', 'Eenheid'))
+    importBatchId: safeText(row.ImportBatchID || row.ImportBatchId || row.ID),
+    sourceType: safeText(row.SourceType || 'Upload'),
+    sourceName: safeText(row.SourceName || row.BestandsNaam || row.FileName),
+    sourceReference: safeText(row.SourceReference || row.Reference),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    status: safeText(row.Status || getConsumptionImportStatusOpen_()),
+    actor: safeText(row.Actor),
+    opmerking: safeText(row.Opmerking),
+    rawLineCount: safeNumber(row.RawLineCount, 0),
+    groupedLineCount: safeNumber(row.GroupedLineCount, 0),
+    aangemaaktOp: safeText(row.AangemaaktOp),
+    aangemaaktOpRaw: safeText(row.AangemaaktOpRaw || row.AangemaaktOp),
+    verwerktOp: safeText(row.VerwerktOp),
   };
 }
 
-function buildHeaderIndexMap(headers) {
-  const map = {};
-  headers.forEach((header, index) => {
-    map[safeText(header)] = index;
-  });
-  return map;
-}
-
-function getCellByHeader(row, headerIndexMap, headerName) {
-  const idx = headerIndexMap[safeText(headerName)];
-  if (idx === undefined) return '';
-  return row[idx];
-}
-
-function normalizeConsumptionImportRow(rawRow, headerIndexMap, rowNumber) {
-  const aliases = getSourceHeaderAliases();
-
-  const obj = {
-    bronRijNr: rowNumber,
-    documentDatum: toIsoDate(getCellByHeader(rawRow, headerIndexMap, aliases.documentDatum)),
-    techniekerCode: safeText(getCellByHeader(rawRow, headerIndexMap, aliases.techniekerCode)),
-    techniekerNaam: safeText(getCellByHeader(rawRow, headerIndexMap, aliases.techniekerNaam)),
-    werfRef: safeText(getCellByHeader(rawRow, headerIndexMap, aliases.werfRef)),
-    artikelCode: safeText(getCellByHeader(rawRow, headerIndexMap, aliases.artikelCode)),
-    artikelOmschrijving: safeText(getCellByHeader(rawRow, headerIndexMap, aliases.artikelOmschrijving)),
-    aantal: safeNumber(getCellByHeader(rawRow, headerIndexMap, aliases.aantal), 0),
-    eenheid: safeText(getCellByHeader(rawRow, headerIndexMap, aliases.eenheid))
+function mapConsumptionImportLine(row) {
+  return {
+    importLineId: safeText(row.ImportLineID || row.ImportLineId || row.ID),
+    importBatchId: safeText(row.ImportBatchID || row.ImportBatchId),
+    techniekerCode: safeText(row.TechniekerCode || row.TechnicianCode || row.TechCode),
+    techniekerNaam: safeText(row.TechniekerNaam || row.TechnicianName),
+    werkorderNr: safeText(row.WerkorderNr || row.WorkOrderNr || row.OrderNr),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    artikelCode: safeText(row.ArtikelCode || row.ArtikelNr),
+    artikelOmschrijving: safeText(row.ArtikelOmschrijving || row.Artikel),
+    typeMateriaal: safeText(row.TypeMateriaal || determineMaterialTypeFromArticle(safeText(row.ArtikelCode || row.ArtikelNr))),
+    eenheid: safeText(row.Eenheid || row.Unit),
+    aantal: safeNumber(row.Aantal || row.Quantity, 0),
+    bronRij: safeText(row.BronRij || row.SourceRow),
+    opmerking: safeText(row.Opmerking),
   };
-
-  obj.bronHash = buildConsumptionImportHash(obj);
-  return obj;
-}
-
-function readConsumptionSourceRowsFromSpreadsheet(spreadsheet) {
-  const sheet = getConsumptionSourceSheet(spreadsheet);
-  const values = sheet.getDataRange().getValues();
-
-  if (values.length < 2) {
-    return [];
-  }
-
-  const headers = values[0].map(h => safeText(h));
-  const headerIndexMap = buildHeaderIndexMap(headers);
-
-  return values.slice(1).map((row, idx) => normalizeConsumptionImportRow(row, headerIndexMap, idx + 2));
 }
 
 /* ---------------------------------------------------------
-   Hash / duplicate
+   Read layer
    --------------------------------------------------------- */
 
-function bytesToHexString(bytes) {
-  return (bytes || []).map(b => {
-    const v = b < 0 ? b + 256 : b;
-    return ('0' + v.toString(16)).slice(-2);
-  }).join('');
+function getAllConsumptionImportBatches() {
+  return readObjectsSafe(getConsumptionImportBatchTab_())
+    .map(mapConsumptionImportBatch)
+    .sort(function (a, b) {
+      return (
+        safeText(b.documentDatumIso).localeCompare(safeText(a.documentDatumIso)) ||
+        safeText(b.aangemaaktOpRaw).localeCompare(safeText(a.aangemaaktOpRaw)) ||
+        safeText(b.importBatchId).localeCompare(safeText(a.importBatchId))
+      );
+    });
 }
 
-function buildConsumptionImportHash(row) {
-  const raw = [
-    safeText(row.documentDatum),
-    safeText(row.techniekerCode),
-    safeText(row.werfRef),
-    safeText(row.artikelCode),
-    String(safeNumber(row.aantal, 0))
+function getAllConsumptionImportLines() {
+  return readObjectsSafe(getConsumptionImportLineTab_())
+    .map(mapConsumptionImportLine)
+    .sort(function (a, b) {
+      return (
+        safeText(a.importBatchId).localeCompare(safeText(b.importBatchId)) ||
+        safeText(a.techniekerCode).localeCompare(safeText(b.techniekerCode)) ||
+        safeText(a.documentDatumIso).localeCompare(safeText(b.documentDatumIso)) ||
+        safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving))
+      );
+    });
+}
+
+function getConsumptionImportBatchById(importBatchId) {
+  var id = safeText(importBatchId);
+  if (!id) return null;
+
+  return getAllConsumptionImportBatches().find(function (item) {
+    return safeText(item.importBatchId) === id;
+  }) || null;
+}
+
+function getConsumptionImportLinesByBatchId(importBatchId) {
+  var id = safeText(importBatchId);
+  return getAllConsumptionImportLines().filter(function (item) {
+    return safeText(item.importBatchId) === id;
+  });
+}
+
+function buildConsumptionImportBatchesWithLines(headers, lines) {
+  var lineMap = {};
+
+  (lines || []).forEach(function (line) {
+    var id = safeText(line.importBatchId);
+    if (!lineMap[id]) lineMap[id] = [];
+    lineMap[id].push(line);
+  });
+
+  return (headers || []).map(function (header) {
+    var importLines = lineMap[safeText(header.importBatchId)] || [];
+
+    return Object.assign({}, header, {
+      lines: importLines,
+      lineCount: importLines.length,
+      totaalAantal: importLines.reduce(function (sum, line) {
+        return sum + safeNumber(line.aantal, 0);
+      }, 0),
+      techniekerCount: Object.keys(
+        importLines.reduce(function (acc, line) {
+          acc[safeText(line.techniekerCode)] = true;
+          return acc;
+        }, {})
+      ).length,
+    });
+  });
+}
+
+function getConsumptionImportBatchWithLines(importBatchId) {
+  var header = getConsumptionImportBatchById(importBatchId);
+  if (!header) return null;
+  return buildConsumptionImportBatchesWithLines(
+    [header],
+    getConsumptionImportLinesByBatchId(importBatchId)
+  )[0] || null;
+}
+
+/* ---------------------------------------------------------
+   Normalization helpers
+   --------------------------------------------------------- */
+
+function normalizeConsumptionImportLine_(line, index) {
+  line = line || {};
+
+  var techniekerCode = safeText(
+    line.techniekerCode ||
+    line.technicianCode ||
+    line.techCode ||
+    line.ref ||
+    line.busCode
+  );
+
+  var documentDatum = safeText(
+    line.documentDatum ||
+    line.documentDate ||
+    line.datum ||
+    line.date
+  );
+
+  var artikelCode = safeText(
+    line.artikelCode ||
+    line.artikelNr ||
+    line.code ||
+    line.articleCode
+  );
+
+  var artikelOmschrijving = safeText(
+    line.artikelOmschrijving ||
+    line.artikel ||
+    line.omschrijving ||
+    line.description
+  );
+
+  var aantal = safeNumber(
+    line.aantal ||
+    line.quantity ||
+    line.verbruik ||
+    line.qty,
+    0
+  );
+
+  return {
+    techniekerCode: techniekerCode,
+    techniekerNaam: safeText(line.techniekerNaam || line.technicianName),
+    werkorderNr: safeText(line.werkorderNr || line.workOrderNr || line.orderNr),
+    documentDatum: documentDatum,
+    documentDatumIso: documentDatum,
+    artikelCode: artikelCode,
+    artikelOmschrijving: artikelOmschrijving,
+    typeMateriaal: safeText(
+      line.typeMateriaal ||
+      determineMaterialTypeFromArticle(artikelCode)
+    ),
+    eenheid: safeText(line.eenheid || line.unit || 'Stuk'),
+    aantal: aantal,
+    bronRij: safeText(line.bronRij || line.sourceRow || (index + 1)),
+    opmerking: safeText(line.opmerking || line.remark),
+  };
+}
+
+function validateConsumptionImportLines_(lines) {
+  var rows = Array.isArray(lines) ? lines : [];
+  if (!rows.length) {
+    throw new Error('Geen verbruikslijnen ontvangen.');
+  }
+
+  rows.forEach(function (line, index) {
+    var rowNr = index + 1;
+
+    if (!safeText(line.techniekerCode)) {
+      throw new Error('TechniekerCode ontbreekt op lijn ' + rowNr + '.');
+    }
+    if (!safeText(line.documentDatumIso)) {
+      throw new Error('Documentdatum ontbreekt op lijn ' + rowNr + '.');
+    }
+    if (!safeText(line.artikelCode)) {
+      throw new Error('Artikelcode ontbreekt op lijn ' + rowNr + '.');
+    }
+    if (safeNumber(line.aantal, 0) <= 0) {
+      throw new Error('Aantal moet groter zijn dan 0 op lijn ' + rowNr + '.');
+    }
+  });
+
+  return true;
+}
+
+function buildConsumptionImportGroupKey_(line) {
+  return [
+    safeText(line.techniekerCode),
+    safeText(line.documentDatumIso),
+    safeText(line.artikelCode),
+    safeText(line.eenheid),
+    safeText(line.typeMateriaal),
+    safeText(line.werkorderNr)
   ].join('|');
-
-  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw);
-  return bytesToHexString(digest);
 }
 
-function getExistingConsumptionImportHashes() {
-  const rows = readObjectsSafe(TABS.CONSUMPTION_IMPORT_RAW);
-  const map = {};
+function groupConsumptionImportLines_(lines) {
+  var grouped = {};
 
-  rows.forEach(row => {
-    const hash = safeText(row.BronHash);
-    if (!hash) return;
-    map[hash] = true;
+  (Array.isArray(lines) ? lines : []).forEach(function (line) {
+    var key = buildConsumptionImportGroupKey_(line);
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        techniekerCode: safeText(line.techniekerCode),
+        techniekerNaam: safeText(line.techniekerNaam),
+        werkorderNr: safeText(line.werkorderNr),
+        documentDatum: safeText(line.documentDatum),
+        documentDatumIso: safeText(line.documentDatumIso),
+        artikelCode: safeText(line.artikelCode),
+        artikelOmschrijving: safeText(line.artikelOmschrijving),
+        typeMateriaal: safeText(line.typeMateriaal),
+        eenheid: safeText(line.eenheid),
+        aantal: 0,
+        bronRij: safeText(line.bronRij),
+        opmerking: safeText(line.opmerking),
+      };
+    }
+
+    grouped[key].aantal += safeNumber(line.aantal, 0);
+
+    if (!grouped[key].techniekerNaam) {
+      grouped[key].techniekerNaam = safeText(line.techniekerNaam);
+    }
+    if (!grouped[key].artikelOmschrijving) {
+      grouped[key].artikelOmschrijving = safeText(line.artikelOmschrijving);
+    }
+    if (!grouped[key].opmerking && safeText(line.opmerking)) {
+      grouped[key].opmerking = safeText(line.opmerking);
+    }
   });
 
-  return map;
+  return Object.keys(grouped)
+    .map(function (key) { return grouped[key]; })
+    .sort(function (a, b) {
+      return (
+        safeText(a.techniekerCode).localeCompare(safeText(b.techniekerCode)) ||
+        safeText(a.documentDatumIso).localeCompare(safeText(b.documentDatumIso)) ||
+        safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving)) ||
+        safeText(a.artikelCode).localeCompare(safeText(b.artikelCode))
+      );
+    });
 }
 
-/* ---------------------------------------------------------
-   Raw object build
-   --------------------------------------------------------- */
-
-function determineRawImportValidationStatus(row, existingHashMap, seenThisRunMap) {
-  if (!safeText(row.documentDatum) || !safeText(row.techniekerCode) || !safeText(row.artikelCode)) {
-    return {
-      status: IMPORT_VALIDATION_STATUS.ERROR,
-      error: 'Verplichte bronvelden ontbreken'
-    };
-  }
-
-  if (safeNumber(row.aantal, 0) <= 0) {
-    return {
-      status: IMPORT_VALIDATION_STATUS.ERROR,
-      error: 'Aantal moet groter zijn dan 0'
-    };
-  }
-
-  if (existingHashMap[row.bronHash] || seenThisRunMap[row.bronHash]) {
-    return {
-      status: IMPORT_VALIDATION_STATUS.DUPLICATE,
-      error: 'BronHash bestaat al'
-    };
-  }
+function summarizeConsumptionImportLines_(lines) {
+  var rows = Array.isArray(lines) ? lines : [];
 
   return {
-    status: IMPORT_VALIDATION_STATUS.NEW,
-    error: ''
+    lineCount: rows.length,
+    totaalAantal: rows.reduce(function (sum, row) {
+      return sum + safeNumber(row.aantal, 0);
+    }, 0),
+    techniekerCount: Object.keys(
+      rows.reduce(function (acc, row) {
+        acc[safeText(row.techniekerCode)] = true;
+        return acc;
+      }, {})
+    ).length,
+    artikelCount: Object.keys(
+      rows.reduce(function (acc, row) {
+        acc[safeText(row.artikelCode)] = true;
+        return acc;
+      }, {})
+    ).length,
   };
 }
 
-function buildConsumptionImportRawObject(runId, normalizedRow, validationResult) {
+/* ---------------------------------------------------------
+   Access policy
+   --------------------------------------------------------- */
+
+function assertConsumptionImportAccess_(sessionId) {
+  var user = requireLoggedInUser(sessionId);
+  assertRoleAllowed(
+    user,
+    [ROLE.WAREHOUSE, ROLE.MANAGER, ROLE.MOBILE_WAREHOUSE],
+    'Geen rechten voor verbruiksimport.'
+  );
+  return user;
+}
+
+/* ---------------------------------------------------------
+   Preview
+   --------------------------------------------------------- */
+
+function previewConsumptionImportLines(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  assertConsumptionImportAccess_(sessionId);
+
+  var rawLines = Array.isArray(payload.lines) ? payload.lines : [];
+  var normalizedLines = rawLines.map(normalizeConsumptionImportLine_);
+  validateConsumptionImportLines_(normalizedLines);
+
+  var groupedLines = groupConsumptionImportLines_(normalizedLines);
+
   return {
-    RunID: safeText(runId),
-    BronRijNr: safeNumber(normalizedRow.bronRijNr, 0),
-    DocumentDatum: safeText(normalizedRow.documentDatum),
-    TechniekerCode: safeText(normalizedRow.techniekerCode),
-    TechniekerNaam: safeText(normalizedRow.techniekerNaam),
-    WerfRef: safeText(normalizedRow.werfRef),
-    ArtikelCode: safeText(normalizedRow.artikelCode),
-    ArtikelOmschrijving: safeText(normalizedRow.artikelOmschrijving),
-    Aantal: safeNumber(normalizedRow.aantal, 0),
-    Eenheid: safeText(normalizedRow.eenheid),
-    BronHash: safeText(normalizedRow.bronHash),
-    ValidatieStatus: safeText(validationResult.status),
-    ValidatieFout: safeText(validationResult.error),
-    BoekStatus: IMPORT_BOOK_STATUS.NOT_BOOKED,
-    BoekFout: '',
-    RawJson: JSON.stringify(normalizedRow)
+    items: groupedLines,
+    summary: summarizeConsumptionImportLines_(groupedLines),
+    rawLineCount: rawLines.length,
   };
 }
 
-function appendConsumptionImportRawObjects(rawObjects) {
-  if (!(rawObjects || []).length) {
-    return { success: true, lines: 0 };
-  }
-
-  appendObjects(TABS.CONSUMPTION_IMPORT_RAW, rawObjects);
-  return { success: true, lines: rawObjects.length };
-}
-
 /* ---------------------------------------------------------
-   Main import
+   Import save
    --------------------------------------------------------- */
 
-function importConsumptionFromDrive() {
-  const sourceFile = getConsumptionSourceDriveFile();
-  const runId = startConsumptionImportRun(sourceFile);
+function importConsumptionLines(payload) {
+  payload = payload || {};
 
-  let tempFileId = '';
-  let rawObjects = [];
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertConsumptionImportAccess_(sessionId);
 
-  try {
-    writeConsumptionImportLog(runId, 'INFO', 'Import gestart', {
-      bronBestand: sourceFile.getName(),
-      bronMimeType: sourceFile.getMimeType()
-    });
+  var rawLines = Array.isArray(payload.lines) ? payload.lines : [];
+  var normalizedLines = rawLines.map(normalizeConsumptionImportLine_);
+  validateConsumptionImportLines_(normalizedLines);
 
-    const source = openConsumptionSourceSpreadsheetFromDrive(sourceFile);
-    tempFileId = safeText(source.tempFileId);
+  var groupedLines = groupConsumptionImportLines_(normalizedLines);
 
-    const normalizedRows = readConsumptionSourceRowsFromSpreadsheet(source.spreadsheet);
-    const existingHashMap = getExistingConsumptionImportHashes();
-    const seenThisRunMap = {};
+  var sourceType = safeText(payload.sourceType || 'Upload');
+  var sourceName = safeText(payload.sourceName || payload.bestandsNaam || payload.fileName);
+  var sourceReference = safeText(payload.sourceReference || payload.reference);
+  var documentDatum = safeText(
+    payload.documentDatum ||
+    payload.documentDate ||
+    (groupedLines.length ? groupedLines[0].documentDatumIso : Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd'))
+  );
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var importBatchId = makeConsumptionImportBatchId_();
 
-    rawObjects = normalizedRows.map(row => {
-      const validationResult = determineRawImportValidationStatus(row, existingHashMap, seenThisRunMap);
+  var batchObj = {
+    ImportBatchID: importBatchId,
+    SourceType: sourceType,
+    SourceName: sourceName,
+    SourceReference: sourceReference,
+    DocumentDatum: documentDatum,
+    DocumentDatumIso: documentDatum,
+    Status: getConsumptionImportStatusOpen_(),
+    Actor: safeText(payload.actor || actor.naam || actor.email),
+    Opmerking: safeText(payload.opmerking || payload.remark),
+    RawLineCount: rawLines.length,
+    GroupedLineCount: groupedLines.length,
+    AangemaaktOp: toDisplayDateTime(nowRaw),
+    AangemaaktOpRaw: nowRaw,
+    VerwerktOp: '',
+  };
 
-      if (validationResult.status === IMPORT_VALIDATION_STATUS.NEW) {
-        seenThisRunMap[row.bronHash] = true;
-      }
+  appendObjects(getConsumptionImportBatchTab_(), [batchObj]);
 
-      return buildConsumptionImportRawObject(runId, row, validationResult);
-    });
-
-    appendConsumptionImportRawObjects(rawObjects);
-
-    const duplicateCount = rawObjects.filter(x => safeText(x.ValidatieStatus) === IMPORT_VALIDATION_STATUS.DUPLICATE).length;
-    const errorCount = rawObjects.filter(x => safeText(x.ValidatieStatus) === IMPORT_VALIDATION_STATUS.ERROR).length;
-    const newCount = rawObjects.filter(x => safeText(x.ValidatieStatus) === IMPORT_VALIDATION_STATUS.NEW).length;
-
-    finishConsumptionImportRun(runId, {
-      Status: IMPORT_RUN_STATUS.IMPORTED,
-      AantalRuweLijnen: rawObjects.length,
-      AantalGeldigeLijnen: newCount,
-      AantalFoutLijnen: errorCount,
-      AantalDubbeleLijnen: duplicateCount,
-      Opmerking: ''
-    });
-
-    writeConsumptionImportLog(runId, 'INFO', 'Import afgerond', {
-      totaal: rawObjects.length,
-      nieuw: newCount,
-      fout: errorCount,
-      dubbel: duplicateCount
-    });
-
-    writeAudit(
-      'Verbruiksimport uitgevoerd',
-      'Systeem',
-      'Automatisch',
-      'VerbruikImportRun',
-      runId,
-      {
-        bronBestand: sourceFile.getName(),
-        totaal: rawObjects.length,
-        nieuw: newCount,
-        fout: errorCount,
-        dubbel: duplicateCount
-      }
-    );
-
+  var lineObjects = groupedLines.map(function (line) {
     return {
-      success: true,
-      runId: runId,
-      sourceFileName: sourceFile.getName(),
-      totalRows: rawObjects.length,
-      newRows: newCount,
-      duplicateRows: duplicateCount,
-      errorRows: errorCount,
-      message: 'Verbruiksimport voltooid.'
+      ImportLineID: makeConsumptionImportLineId_(),
+      ImportBatchID: importBatchId,
+      TechniekerCode: line.techniekerCode,
+      TechniekerNaam: line.techniekerNaam,
+      WerkorderNr: line.werkorderNr,
+      DocumentDatum: line.documentDatum,
+      DocumentDatumIso: line.documentDatumIso,
+      ArtikelCode: line.artikelCode,
+      ArtikelOmschrijving: line.artikelOmschrijving,
+      TypeMateriaal: line.typeMateriaal,
+      Eenheid: line.eenheid,
+      Aantal: line.aantal,
+      BronRij: line.bronRij,
+      Opmerking: line.opmerking,
     };
+  });
 
-  } catch (err) {
-    finishConsumptionImportRun(runId, {
-      Status: IMPORT_RUN_STATUS.FAILED,
-      AantalRuweLijnen: rawObjects.length,
-      AantalGeldigeLijnen: rawObjects.filter(x => safeText(x.ValidatieStatus) === IMPORT_VALIDATION_STATUS.NEW).length,
-      AantalFoutLijnen: rawObjects.filter(x => safeText(x.ValidatieStatus) === IMPORT_VALIDATION_STATUS.ERROR).length,
-      AantalDubbeleLijnen: rawObjects.filter(x => safeText(x.ValidatieStatus) === IMPORT_VALIDATION_STATUS.DUPLICATE).length,
-      Opmerking: safeText(err && err.message ? err.message : err)
-    });
-
-    writeConsumptionImportLog(runId, 'ERROR', 'Import mislukt', {
-      error: safeText(err && err.message ? err.message : err)
-    });
-
-    throw err;
-
-  } finally {
-    cleanupTemporaryImportedSpreadsheet(tempFileId);
+  if (lineObjects.length) {
+    appendObjects(getConsumptionImportLineTab_(), lineObjects);
   }
+
+  writeAudit({
+    actie: 'IMPORT_CONSUMPTION_LINES',
+    actor: actor,
+    documentType: 'VerbruiksImport',
+    documentId: importBatchId,
+    details: {
+      sourceType: sourceType,
+      rawLineCount: rawLines.length,
+      groupedLineCount: groupedLines.length,
+    },
+  });
+
+  return {
+    batch: getConsumptionImportBatchWithLines(importBatchId),
+    summary: summarizeConsumptionImportLines_(groupedLines),
+    rawLineCount: rawLines.length,
+    groupedLineCount: groupedLines.length,
+  };
 }
 
 /* ---------------------------------------------------------
-   Scheduler wrappers
+   Status updates
    --------------------------------------------------------- */
 
-function runNightlyConsumptionImport() {
-  return importConsumptionFromDrive();
+function markConsumptionImportProcessed(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertConsumptionImportAccess_(sessionId);
+  var importBatchId = safeText(payload.importBatchId);
+  if (!importBatchId) throw new Error('ImportBatchId ontbreekt.');
+
+  var batch = getConsumptionImportBatchById(importBatchId);
+  if (!batch) throw new Error('Importbatch niet gevonden.');
+
+  var table = getAllValues(getConsumptionImportBatchTab_());
+  if (!table.length) throw new Error('Importbatchtab is leeg of ongeldig.');
+
+  var headerRow = table[0];
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var rows = readObjectsSafe(getConsumptionImportBatchTab_()).map(function (row) {
+    var current = mapConsumptionImportBatch(row);
+    if (safeText(current.importBatchId) !== importBatchId) {
+      return row;
+    }
+
+    row.Status = getConsumptionImportStatusProcessed_();
+    row.VerwerktOp = toDisplayDateTime(nowRaw);
+    return row;
+  });
+
+  writeFullTable(
+    getConsumptionImportBatchTab_(),
+    headerRow,
+    rows.map(function (row) {
+      return buildRowFromHeaders(headerRow, row);
+    })
+  );
+
+  writeAudit({
+    actie: 'MARK_CONSUMPTION_IMPORT_PROCESSED',
+    actor: actor,
+    documentType: 'VerbruiksImport',
+    documentId: importBatchId,
+    details: {},
+  });
+
+  return getConsumptionImportBatchWithLines(importBatchId);
 }
 
-function testConsumptionImport() {
-  return importConsumptionFromDrive();
+/* ---------------------------------------------------------
+   Queries
+   --------------------------------------------------------- */
+
+function getConsumptionImportData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertConsumptionImportAccess_(sessionId);
+  var rows = buildConsumptionImportBatchesWithLines(
+    getAllConsumptionImportBatches(),
+    getAllConsumptionImportLines()
+  );
+
+  return {
+    items: rows,
+    batches: rows,
+    summary: {
+      totaal: rows.length,
+      open: rows.filter(function (x) { return safeText(x.status) === getConsumptionImportStatusOpen_(); }).length,
+      verwerkt: rows.filter(function (x) { return safeText(x.status) === getConsumptionImportStatusProcessed_(); }).length,
+      gesloten: rows.filter(function (x) { return safeText(x.status) === getConsumptionImportStatusClosed_(); }).length,
+      actorRol: safeText(actor.rol),
+    }
+  };
 }

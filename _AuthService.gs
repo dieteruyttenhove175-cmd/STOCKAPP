@@ -1,182 +1,343 @@
 /* =========================================================
-   10_AuthService.gs — login / logout / eigen login wijzigen
+   10_AuthService.gs
+   Refactor: authentication core service
+   Doel:
+   - duidelijke loginflow voor code-login
+   - admins blijven Google-auth only
+   - mislukte pogingen apart loggen
+   - eigen logininstellingen veilig aanpassen
    ========================================================= */
 
-function makeLoginFailureId() {
-  return makeStampedId('LF');
+/* ---------------------------------------------------------
+   Tabs / helpers
+   --------------------------------------------------------- */
+
+function getUsersTab_() {
+  return TABS.USERS || 'Gebruikers';
 }
 
-function safeWriteAuthAudit(action, role, actor, documentType, documentId, details) {
-  if (typeof writeAudit === 'function') {
-    writeAudit(action, role, actor, documentType, documentId, details);
-  }
+function getLoginFailuresTab_() {
+  return TABS.LOGIN_FAILURES || 'LoginFailures';
 }
 
-function writeLoginFailure(loginEmail, enteredCode, reason, matchedUser) {
-  appendObjects(TABS.LOGIN_FAILURES, [{
-    FoutID: makeLoginFailureId(),
-    Tijdstip: nowStamp(),
-    LoginEmail: normalizeLoginEmail(loginEmail),
-    IngevoerdeCode: safeText(enteredCode),
-    Reden: safeText(reason),
-    MatchGebruiker: safeText(matchedUser)
-  }]);
+function makeLoginFailureId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'LGF-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
 }
 
-function validateLoginPayload(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-
-  const loginEmail = normalizeLoginEmail(payload.loginEmail);
-  const loginCode = safeText(payload.loginCode);
-
-  if (!loginEmail) throw new Error('Login-email ontbreekt.');
-  if (!loginCode) throw new Error('Code ontbreekt.');
-
-  return { loginEmail, loginCode };
-}
-
-function loginWithCode(payload) {
-  const parsed = validateLoginPayload(payload);
-  const loginEmail = parsed.loginEmail;
-  const loginCode = parsed.loginCode;
-
-  const users = getAllUsers();
-  const matchedByEmail = users.find(user => getEffectiveLoginEmail(user) === loginEmail);
-
-  if (!matchedByEmail) {
-    writeLoginFailure(loginEmail, loginCode, 'Onbekende login-email', '');
-    throw new Error('Ongeldige login-email of code.');
-  }
-
-  if (matchedByEmail.rol === ROLE.ADMIN) {
-    writeLoginFailure(
-      loginEmail,
-      loginCode,
-      'Admin probeerde code-login',
-      matchedByEmail.naam || matchedByEmail.email
-    );
-    throw new Error('Admin meldt aan via Google-account, niet via code.');
-  }
-
-  if (safeText(matchedByEmail.loginCode) !== loginCode) {
-    writeLoginFailure(
-      loginEmail,
-      loginCode,
-      'Foute code',
-      matchedByEmail.naam || matchedByEmail.email
-    );
-    throw new Error('Ongeldige login-email of code.');
-  }
-
-  const session = createSessionForUser(matchedByEmail);
-  updateUserLastLogin(matchedByEmail);
-
-  safeWriteAuthAudit(
-    'Login',
-    matchedByEmail.rol,
-    matchedByEmail.naam || getEffectiveLoginEmail(matchedByEmail),
-    'Sessie',
-    session.sessionId,
-    { loginEmail: getEffectiveLoginEmail(matchedByEmail) }
+function mapAuthUser_(row) {
+  var email = normalizeLoginEmail(
+    row.LoginEmail || row.LoginMail || row.Login || row.Email || row.Mail || ''
   );
 
   return {
-    success: true,
-    sessionId: session.sessionId,
-    authMode: 'custom_session',
-    user: {
-      naam: matchedByEmail.naam,
-      rol: matchedByEmail.rol,
-      techniekerCode: matchedByEmail.techniekerCode,
-      loginEmail: getEffectiveLoginEmail(matchedByEmail)
-    }
+    code: safeText(row.Code || row.GebruikerCode || row.UserCode),
+    naam: safeText(row.Naam || row.Name),
+    rol: safeText(row.Rol || row.Role),
+    actief: row.Actief === undefined ? true : isTrue(row.Actief),
+    email: safeText(row.Email || row.Mail),
+    loginEmail: email,
+    loginCode: safeText(row.LoginCode || row.CodeLogin || row.Pin || ''),
   };
 }
 
+function getAllAuthUsers_() {
+  return readObjectsSafe(getUsersTab_()).map(mapAuthUser_);
+}
+
+function getActiveAuthUsers_() {
+  return getAllAuthUsers_().filter(function (item) {
+    return item.actief;
+  });
+}
+
+function getAuthUserByEffectiveLoginEmail_(loginEmail) {
+  var target = normalizeLoginEmail(loginEmail);
+  if (!target) return null;
+
+  return getActiveAuthUsers_().find(function (item) {
+    return normalizeLoginEmail(item.loginEmail || item.email) === target;
+  }) || null;
+}
+
+function isAdminUser_(user) {
+  return safeText(user && user.rol) === safeText(ROLE.ADMIN || 'Admin');
+}
+
+function isCodeLoginAllowedForUser_(user) {
+  return !!user && !isAdminUser_(user);
+}
+
+function assertValidLoginEmail_(value) {
+  var email = normalizeLoginEmail(value);
+  if (!email) {
+    throw new Error('Login e-mail is verplicht.');
+  }
+  if (!isValidEmail(email)) {
+    throw new Error('Ongeldig e-mailadres.');
+  }
+  return email;
+}
+
+function assertValidLoginCode_(value) {
+  var code = safeText(value);
+  if (!code) {
+    throw new Error('Logincode is verplicht.');
+  }
+  if (code.length < 4) {
+    throw new Error('Logincode moet minstens 4 tekens bevatten.');
+  }
+  return code;
+}
+
+function writeLoginFailure_(payload) {
+  payload = payload || {};
+
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  appendObjects(getLoginFailuresTab_(), [{
+    LoginFailureID: makeLoginFailureId_(),
+    LoginEmail: normalizeLoginEmail(payload.loginEmail),
+    Reason: safeText(payload.reason),
+    PayloadInfo: safeJson(payload.extra || {}),
+    AangemaaktOp: toDisplayDateTime(nowRaw),
+    AangemaaktOpRaw: nowRaw,
+  }]);
+}
+
+function ensureUserAdminSupport_() {
+  return {
+    hasUpdateUserLastLogin: typeof updateUserLastLogin === 'function',
+    hasSyncOpenSessionsToNewLoginEmail: typeof syncOpenSessionsToNewLoginEmail === 'function',
+  };
+}
+
+/* ---------------------------------------------------------
+   Login / logout
+   --------------------------------------------------------- */
+
+function validateLoginPayload_(payload) {
+  payload = payload || {};
+  return {
+    loginEmail: assertValidLoginEmail_(payload.loginEmail),
+    loginCode: assertValidLoginCode_(payload.loginCode),
+  };
+}
+
+function buildLoginSuccessResponse_(user, session) {
+  return {
+    ok: true,
+    sessionId: safeText(session && (session.sessionId || session.SessionID || session.id)),
+    user: {
+      code: safeText(user.code),
+      naam: safeText(user.naam),
+      rol: safeText(user.rol),
+      loginEmail: safeText(user.loginEmail),
+    },
+  };
+}
+
+function loginWithCode(payload) {
+  var normalized = validateLoginPayload_(payload);
+  var user = getAuthUserByEffectiveLoginEmail_(normalized.loginEmail);
+
+  if (!user) {
+    writeLoginFailure_({
+      loginEmail: normalized.loginEmail,
+      reason: 'USER_NOT_FOUND',
+    });
+    throw new Error('Onbekende login of foutieve code.');
+  }
+
+  if (!isCodeLoginAllowedForUser_(user)) {
+    writeLoginFailure_({
+      loginEmail: normalized.loginEmail,
+      reason: 'ADMIN_GOOGLE_ONLY',
+      extra: { rol: user.rol },
+    });
+    throw new Error('Admins melden aan via Google-account.');
+  }
+
+  if (safeText(user.loginCode) !== safeText(normalized.loginCode)) {
+    writeLoginFailure_({
+      loginEmail: normalized.loginEmail,
+      reason: 'INVALID_CODE',
+      extra: { userCode: user.code },
+    });
+    throw new Error('Onbekende login of foutieve code.');
+  }
+
+  if (typeof createSessionForUser !== 'function') {
+    throw new Error('Session service ontbreekt. Werk eerst het sessionblok in.');
+  }
+
+  var session = createSessionForUser({
+    userCode: user.code,
+    userName: user.naam,
+    userRole: user.rol,
+    loginEmail: user.loginEmail,
+  });
+
+  var support = ensureUserAdminSupport_();
+  if (support.hasUpdateUserLastLogin) {
+    updateUserLastLogin(user.code);
+  }
+
+  writeAudit({
+    actie: 'LOGIN_WITH_CODE',
+    actor: {
+      code: user.code,
+      naam: user.naam,
+      rol: user.rol,
+      email: user.loginEmail,
+    },
+    documentType: 'Sessie',
+    documentId: safeText(session && (session.sessionId || session.SessionID || session.id)),
+    details: {
+      loginEmail: user.loginEmail,
+    },
+  });
+
+  return buildLoginSuccessResponse_(user, session);
+}
+
 function logoutBySession(payload) {
-  const sessionId = getPayloadSessionId(payload);
-  if (!sessionId) return { success: true };
+  payload = payload || {};
 
-  const changed = invalidateSessionById(sessionId);
+  var sessionId = safeText(payload.sessionId || payload.sid);
+  if (!sessionId) {
+    throw new Error('SessionId ontbreekt.');
+  }
 
-  safeWriteAuthAudit(
-    'Logout',
-    'Sessie',
-    sessionId,
-    'Sessie',
-    sessionId,
-    { invalidated: changed }
-  );
+  if (typeof invalidateSessionById !== 'function') {
+    throw new Error('Session service ontbreekt. Werk eerst het sessionblok in.');
+  }
 
-  return { success: true };
+  invalidateSessionById(sessionId);
+
+  writeAudit({
+    actie: 'LOGOUT_BY_SESSION',
+    actor: {
+      naam: safeText(payload.actorName || ''),
+      rol: safeText(payload.actorRole || ''),
+      email: safeText(payload.actorEmail || ''),
+    },
+    documentType: 'Sessie',
+    documentId: sessionId,
+    details: {},
+  });
+
+  return {
+    ok: true,
+    sessionId: sessionId,
+  };
+}
+
+/* ---------------------------------------------------------
+   Eigen logininstellingen aanpassen
+   --------------------------------------------------------- */
+
+function getUserSheetTable_() {
+  var table = getAllValues(getUsersTab_());
+  if (!table.length) {
+    throw new Error('Gebruikerstab is leeg of ongeldig.');
+  }
+  return table;
+}
+
+function getEditableUserRowByCode_(userCode) {
+  var table = getUserSheetTable_();
+  var headerRow = table[0];
+  var dataRows = table.slice(1);
+
+  for (var i = 0; i < dataRows.length; i += 1) {
+    var obj = rowToObject(headerRow, dataRows[i]);
+    var mapped = mapAuthUser_(obj);
+    if (safeText(mapped.code) === safeText(userCode)) {
+      return {
+        headerRow: headerRow,
+        rowIndex: i,
+        obj: obj,
+        mapped: mapped,
+        rows: dataRows,
+      };
+    }
+  }
+
+  return null;
+}
+
+function assertLoginEmailUniqueForOtherUsers_(loginEmail, currentUserCode) {
+  var target = normalizeLoginEmail(loginEmail);
+
+  var duplicate = getActiveAuthUsers_().find(function (item) {
+    return safeText(item.code) !== safeText(currentUserCode) &&
+      normalizeLoginEmail(item.loginEmail || item.email) === target;
+  });
+
+  if (duplicate) {
+    throw new Error('Deze login e-mail is al in gebruik.');
+  }
 }
 
 function changeOwnLoginAccess(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const currentCode = safeText(payload.currentCode);
-  const newLoginEmailRaw = safeText(payload.newLoginEmail);
-  const newCodeRaw = safeText(payload.newCode);
+  var sessionId = getPayloadSessionId(payload);
+  var actor = requireLoggedInUser(sessionId);
 
-  const user = requireLoggedInUser(sessionId);
-
-  if (user.rol === ROLE.ADMIN) {
-    throw new Error('Admin gebruikt Google-authenticatie en wijzigt hier geen code.');
+  if (!actor || !safeText(actor.code)) {
+    throw new Error('Geen geldige gebruiker gevonden.');
   }
 
-  if (!currentCode) {
-    throw new Error('Huidige code ontbreekt.');
+  if (isAdminUser_(actor)) {
+    throw new Error('Admins passen hun login niet via code-login aan.');
   }
 
-  if (safeText(user.loginCode) !== currentCode) {
-    throw new Error('Huidige code is fout.');
+  var currentCode = assertValidLoginCode_(payload.currentLoginCode);
+  var nextLoginEmail = assertValidLoginEmail_(payload.newLoginEmail || payload.loginEmail);
+  var nextLoginCode = assertValidLoginCode_(payload.newLoginCode || payload.loginCode);
+
+  var editable = getEditableUserRowByCode_(actor.code);
+  if (!editable) {
+    throw new Error('Gebruiker niet gevonden.');
   }
 
-  const oldLoginEmail = getEffectiveLoginEmail(user);
-  const newLoginEmail = normalizeLoginEmail(newLoginEmailRaw || oldLoginEmail);
-  const newCode = newCodeRaw || safeText(user.loginCode);
-
-  if (!newLoginEmail) {
-    throw new Error('Nieuwe login-email ontbreekt.');
+  if (safeText(editable.mapped.loginCode) !== currentCode) {
+    throw new Error('Huidige logincode is fout.');
   }
 
-  if (!isLikelyEmail(newLoginEmail)) {
-    throw new Error('Nieuwe login-email is ongeldig.');
-  }
+  assertLoginEmailUniqueForOtherUsers_(nextLoginEmail, actor.code);
 
-  if (!newCode || newCode.length < 4) {
-    throw new Error('Nieuwe code moet minstens 4 tekens hebben.');
-  }
+  editable.obj.LoginEmail = nextLoginEmail;
+  editable.obj.LoginCode = nextLoginCode;
 
-  const duplicate = getAllUsers().find(other =>
-    other.active &&
-    other.rol !== ROLE.ADMIN &&
-    getEffectiveLoginEmail(other) === newLoginEmail &&
-    getEffectiveLoginEmail(other) !== oldLoginEmail
-  );
-
-  if (duplicate) {
-    throw new Error('Deze login-email is al in gebruik.');
-  }
-
-  updateOwnLoginSettings(user, newLoginEmail, newCode);
-
-  safeWriteAuthAudit(
-    'Logingegevens gewijzigd',
-    user.rol,
-    user.naam || oldLoginEmail,
-    'Gebruiker',
-    oldLoginEmail,
-    {
-      newLoginEmail: newLoginEmail,
-      codeChanged: newCode !== safeText(user.loginCode)
+  var rebuiltRows = editable.rows.map(function (row, index) {
+    if (index !== editable.rowIndex) {
+      return row;
     }
-  );
+    return buildRowFromHeaders(editable.headerRow, editable.obj);
+  });
+
+  writeFullTable(getUsersTab_(), editable.headerRow, rebuiltRows);
+
+  var support = ensureUserAdminSupport_();
+  if (support.hasSyncOpenSessionsToNewLoginEmail) {
+    syncOpenSessionsToNewLoginEmail(actor.code, nextLoginEmail);
+  }
+
+  writeAudit({
+    actie: 'CHANGE_OWN_LOGIN_ACCESS',
+    actor: actor,
+    documentType: 'Gebruiker',
+    documentId: actor.code,
+    details: {
+      loginEmail: nextLoginEmail,
+    },
+  });
 
   return {
-    success: true,
-    loginEmail: newLoginEmail,
-    message: 'Logingegevens aangepast.'
+    ok: true,
+    userCode: actor.code,
+    loginEmail: nextLoginEmail,
   };
 }

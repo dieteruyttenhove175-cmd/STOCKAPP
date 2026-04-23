@@ -1,879 +1,921 @@
 /* =========================================================
-   31_GrabbelOrderService.gs — technieker/magazijn/manager
-   grabbelstockflow
+   31_GrabbelOrderService.gs
+   Refactor: grabbel order core service
+   Doel:
+   - grabbelbestellingen per belevering en technieker
+   - lijnlaag in één ordersheet
+   - technieker submit/update
+   - magazijn klaargezet / meegegeven / niet afgehaald
+   - technieker ontvangst
+   - managerafsluiting
    ========================================================= */
 
-const PREPARATION_DELTA_REASONS = [
-  'Niet genoeg in stock',
-  'Teveel besteld',
-  'Andere reden'
-];
+/* ---------------------------------------------------------
+   Tabs / fallbacks
+   --------------------------------------------------------- */
 
-const TECHNICIAN_RECEIPT_DIFF_REASONS = [
-  '',
-  'Te weinig ontvangen',
-  'Niet ontvangen',
-  'Beschadigd',
-  'Andere reden'
-];
+function getGrabbelOrderTab_() {
+  return TABS.ORDERS || 'Orders';
+}
 
-function buildOrderRows(technician, delivery, stockMap, selectedItems, opmerking, timestamp, baseBestellingId) {
-  const headers = getHeaders(TABS.ORDERS);
+function getGrabbelOrderStatusOpen_() {
+  if (typeof ORDER_STATUS !== 'undefined' && ORDER_STATUS && ORDER_STATUS.OPEN) {
+    return ORDER_STATUS.OPEN;
+  }
+  return 'Open';
+}
 
-  return (selectedItems || []).map((selected, index) => {
-    const stockItem = stockMap[selected.articleCode];
-    if (!stockItem) {
-      throw new Error('Artikel niet gevonden: ' + selected.articleCode);
-    }
+function getGrabbelOrderStatusPrepared_() {
+  if (typeof ORDER_STATUS !== 'undefined' && ORDER_STATUS && ORDER_STATUS.PREPARED) {
+    return ORDER_STATUS.PREPARED;
+  }
+  return 'Klaargezet';
+}
 
-    const aantalDozen = safeNumber(selected.aantalDozen, 0);
-    const totaalStuks = safeNumber(stockItem.pick, 0) * aantalDozen;
-    const bestellingId = `${baseBestellingId}-${index + 1}`;
+function getGrabbelOrderStatusGiven_() {
+  if (typeof ORDER_STATUS !== 'undefined' && ORDER_STATUS && ORDER_STATUS.GIVEN) {
+    return ORDER_STATUS.GIVEN;
+  }
+  return 'Meegegeven';
+}
 
-    return buildRowFromHeaders(headers, {
-      BestellingID: bestellingId,
-      Timestamp: timestamp,
-      TechniekerCode: technician.code,
-      TechniekerNaam: technician.naam,
-      Email: technician.email,
-      GSM: technician.gsm,
-      BeleveringID: delivery.beleveringId,
-      BeleveringDatum: delivery.datumIso,
-      BeleveringDag: delivery.dag,
-      BeleveringUur: delivery.tijdslot,
-      Patroon: technician.patroon,
-      ArtikelCode: stockItem.artikelCode,
-      ArtikelOmschrijving: stockItem.omschrijving,
-      Eenheid: stockItem.eenheid,
-      Pick: stockItem.pick,
-      AantalDozen: aantalDozen,
-      TotaalStuks: totaalStuks,
-      Opmerking: safeText(opmerking),
-      Status: STATUS.REQUESTED,
-      LaatsteUpdate: timestamp,
+function getGrabbelOrderStatusNotPickedUp_() {
+  if (typeof ORDER_STATUS !== 'undefined' && ORDER_STATUS && ORDER_STATUS.NOT_PICKED_UP) {
+    return ORDER_STATUS.NOT_PICKED_UP;
+  }
+  return 'Niet afgehaald';
+}
 
-      AantalDozenVoorzien: aantalDozen,
-      TotaalStuksVoorzien: totaalStuks,
-      DeltaDozen: 0,
-      DeltaStuks: 0,
-      RedenDelta: '',
+function getGrabbelOrderStatusReceived_() {
+  if (typeof ORDER_STATUS !== 'undefined' && ORDER_STATUS && ORDER_STATUS.RECEIVED) {
+    return ORDER_STATUS.RECEIVED;
+  }
+  return 'Ontvangen';
+}
 
-      InKarretje: 'Nee',
-      InKarretjeDoor: '',
-      InKarretjeOp: '',
+function getGrabbelOrderStatusClosed_() {
+  if (typeof ORDER_STATUS !== 'undefined' && ORDER_STATUS && ORDER_STATUS.CLOSED) {
+    return ORDER_STATUS.CLOSED;
+  }
+  return 'Gesloten';
+}
 
-      NotitieMagazijn: '',
-      KlaargezetDoor: '',
-      KlaargezetOp: '',
-      MeegegevenDoor: '',
-      MeegegevenOp: '',
+function makeGrabbelOrderLineId_() {
+  var stamp = Utilities.formatDate(new Date(), TIMEZONE, 'yyyyMMddHHmmss');
+  return 'ORD-' + stamp + '-' + makeUuidId().slice(0, 6).toUpperCase();
+}
 
-      OntvangenDoorTechnieker: 'Nee',
-      OntvangenOp: '',
-      OntvangenType: '',
+/* ---------------------------------------------------------
+   Mapping
+   --------------------------------------------------------- */
 
-      ManagerGoedkeuringStatus: MANAGER_STATUS.NONE,
-      ManagerGoedgekeurdDoor: '',
-      ManagerGoedgekeurdOp: '',
-      ManagerOpmerking: '',
+function mapGrabbelOrderRow(row) {
+  var gevraagd = safeNumber(row.GevraagdAantal || row.Gevraagd || row.RequestedQty, 0);
+  var voorzien = safeNumber(row.VoorzienAantal || row.Voorzien || row.PreparedQty, gevraagd);
 
-      TechniekerLijnOntvangen: '',
-      TechniekerOntvangenDozen: '',
-      TechniekerVerschilReden: ''
+  return {
+    orderId: safeText(row.OrderID || row.OrderId || row.ID),
+    deliveryId: safeText(row.DeliveryID || row.BeleveringID || row.DeliverySlotID),
+    techniekerCode: safeText(row.TechniekerCode || row.TechnicianCode || row.TechCode),
+    techniekerNaam: safeText(row.TechniekerNaam || row.TechnicianName),
+    artikelCode: safeText(row.ArtikelCode || row.ArtikelNr),
+    artikelOmschrijving: safeText(row.ArtikelOmschrijving || row.Artikel),
+    typeMateriaal: safeText(row.TypeMateriaal || determineMaterialTypeFromArticle(safeText(row.ArtikelCode || row.ArtikelNr))),
+    eenheid: safeText(row.Eenheid || row.Unit),
+    gevraagdAantal: gevraagd,
+    voorzienAantal: voorzien,
+    ontvangenAantal: safeNumber(row.OntvangenAantal || row.ReceivedQty, 0),
+    deltaAantal: safeNumber(row.DeltaAantal, voorzien - gevraagd),
+    redenDelta: safeText(row.RedenDelta || row.DeltaReason),
+    opmerking: safeText(row.Opmerking),
+    status: safeText(row.Status || getGrabbelOrderStatusOpen_()),
+    actor: safeText(row.Actor),
+    documentDatum: safeText(row.DocumentDatum),
+    documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum),
+    aangemaaktOp: safeText(row.AangemaaktOp),
+    aangemaaktOpRaw: safeText(row.AangemaaktOpRaw || row.AangemaaktOp),
+    klaargezetOp: safeText(row.KlaargezetOp),
+    meegegevenOp: safeText(row.MeegegevenOp),
+    ontvangenOp: safeText(row.OntvangenOp),
+    geslotenOp: safeText(row.GeslotenOp),
+  };
+}
+
+/* ---------------------------------------------------------
+   Read layer
+   --------------------------------------------------------- */
+
+function getAllGrabbelOrders() {
+  return readObjectsSafe(getGrabbelOrderTab_())
+    .map(mapGrabbelOrderRow)
+    .sort(function (a, b) {
+      return (
+        safeText(b.documentDatumIso).localeCompare(safeText(a.documentDatumIso)) ||
+        safeText(a.deliveryId).localeCompare(safeText(b.deliveryId)) ||
+        safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving))
+      );
     });
+}
+
+function getGrabbelOrdersByDeliveryId(deliveryId) {
+  var id = safeText(deliveryId);
+  return getAllGrabbelOrders().filter(function (item) {
+    return safeText(item.deliveryId) === id;
   });
 }
 
-function getWarehouseData(sessionId) {
-  const user = assertWarehouseAccess(sessionId);
-
-  const orders = getAllGrabbelOrders();
-  const upcomingGroups = buildDeliveryGroupsFromOrders(orders)
-    .filter(group => !!group.beleveringDatumIso)
-    .sort((a, b) => String(a.klaarTegenSort || '').localeCompare(String(b.klaarTegenSort || '')));
-
-  const stats = {
-    open: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.REQUESTED).length,
-    klaargezet: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.READY).length,
-    meegegeven: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.DISPATCHED).length,
-    nietAfgehaald: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.NOT_PICKED).length,
-    ontvangen: upcomingGroups.filter(x => String(x.groupStatus || '') === STATUS.RECEIVED).length,
-    vandaag: upcomingGroups.filter(x => {
-      const vandaag = Utilities.formatDate(nowDate(), getAppTimeZone(), 'yyyy-MM-dd');
-      return String(x.beleveringDatumIso || '') === vandaag;
-    }).length
-  };
-
-  return {
-    user: {
-      naam: safeText(user.naam || ''),
-      rol: safeText(user.rol || '')
-    },
-    stats: stats,
-    upcomingGroups: upcomingGroups
-  };
+function getGrabbelOrdersByTechnicianCode(techniekerCode) {
+  var code = safeText(techniekerCode);
+  return getAllGrabbelOrders().filter(function (item) {
+    return safeText(item.techniekerCode) === code;
+  });
 }
 
-function buildStockMapForOrdering() {
-  const stockMap = {};
-  readObjectsSafe(TABS.STOCK)
-    .map(mapStockItem)
-    .filter(item => item.active)
-    .forEach(item => {
-      stockMap[item.artikelCode] = item;
-    });
+function buildGrabbelOrderGroups(orderRows) {
+  var grouped = {};
 
-  return stockMap;
-}
-
-function getAppData(techRef, sessionId) {
-  assertTechnicianAccessToRef(techRef, sessionId);
-
-  const technicians = readObjectsSafe(TABS.TECHNICIANS).map(mapTechnician);
-  const technician = findTechnicianByRef(technicians, techRef);
-  if (!technician || !technician.active) {
-    throw new Error('Technieker niet gevonden of niet actief.');
-  }
-
-  const allOrders = getAllGrabbelOrders();
-  const techOrders = allOrders
-    .filter(item => normalizeRef(item.techniekerCode) === normalizeRef(technician.code))
-    .sort((a, b) => String(a.deliverySortKey || '').localeCompare(String(b.deliverySortKey || '')));
-
-  const articlePopularity = buildArticlePopularityMap(allOrders);
-
-  const stockItems = readObjectsSafe(TABS.STOCK)
-    .map(mapStockItem)
-    .filter(item => item.active)
-    .sort((a, b) => {
-      const aCount = articlePopularity[a.artikelCode] || 0;
-      const bCount = articlePopularity[b.artikelCode] || 0;
-      if (bCount !== aCount) return bCount - aCount;
-      return String(a.omschrijving || '').localeCompare(String(b.omschrijving || ''));
-    });
-
-  const todayIso = Utilities.formatDate(nowDate(), getAppTimeZone(), 'yyyy-MM-dd');
-
-  const planningDeliveries = getDeliveriesForTechnician(technician)
-    .map(enrichDeliveryWithTimingState)
-    .filter(item => item.datumIso && item.datumIso >= todayIso)
-    .sort((a, b) => String(a.sortKey || '').localeCompare(String(b.sortKey || '')))
-    .slice(0, 4)
-    .map(item => {
-      const hasOrder = hasExistingOrderForDelivery(techOrders, item);
-      return {
-        ...item,
-        hasOrder,
-        canCreateOrder: !hasOrder && !item.cutoffPassed
+  (orderRows || []).forEach(function (row) {
+    var key = safeText(row.deliveryId) + '|' + safeText(row.techniekerCode);
+    if (!grouped[key]) {
+      grouped[key] = {
+        deliveryId: safeText(row.deliveryId),
+        techniekerCode: safeText(row.techniekerCode),
+        techniekerNaam: safeText(row.techniekerNaam),
+        lines: [],
       };
-    });
+    }
+    grouped[key].lines.push(row);
+  });
 
-  const deliveryGroups = buildDeliveryGroupsFromOrders(techOrders)
-    .filter(group => !!group.beleveringDatumIso)
-    .filter(group => {
-      if (group.groupStatus !== STATUS.RECEIVED) return true;
-      const visibleUntil = addDaysToIsoDate(group.beleveringDatumIso, 2);
-      return visibleUntil >= todayIso;
+  return Object.keys(grouped)
+    .map(function (key) {
+      var group = grouped[key];
+      var status = calculateDeliveryGroupStatus(group.lines);
+      var totalRequested = group.lines.reduce(function (sum, line) {
+        return sum + safeNumber(line.gevraagdAantal, 0);
+      }, 0);
+      var totalPrepared = group.lines.reduce(function (sum, line) {
+        return sum + safeNumber(line.voorzienAantal, 0);
+      }, 0);
+
+      return Object.assign({}, group, {
+        status: status,
+        totalRequested: totalRequested,
+        totalPrepared: totalPrepared,
+        lineCount: group.lines.length,
+        hasDelta: group.lines.some(function (line) {
+          return safeNumber(line.gevraagdAantal, 0) !== safeNumber(line.voorzienAantal, 0);
+        }),
+      });
     })
-    .sort((a, b) => String(a.klaarTegenSort || '').localeCompare(String(b.klaarTegenSort || '')))
-    .map(group => ({
-      ...group,
-      isEditable: group.groupStatus === STATUS.REQUESTED,
-      isFrozen: group.groupStatus !== STATUS.REQUESTED,
-      isClosed: group.groupStatus === STATUS.RECEIVED
-    }));
-
-  return {
-    technician,
-    planningDeliveries,
-    stockItems,
-    deliveryGroups,
-    notifications: getNotificationsForTechnician(techRef),
-    generatedAt: Utilities.formatDate(nowDate(), getAppTimeZone(), 'dd/MM/yyyy HH:mm')
-  };
+    .sort(function (a, b) {
+      return (
+        safeText(a.deliveryId).localeCompare(safeText(b.deliveryId)) ||
+        safeText(a.techniekerNaam).localeCompare(safeText(b.techniekerNaam))
+      );
+    });
 }
 
-function submitOrder(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+function getGrabbelOrderGroup(deliveryId, techniekerCode) {
+  var did = safeText(deliveryId);
+  var tcode = safeText(techniekerCode);
 
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertTechnicianAccessToRef(safeText(payload.techRef), sessionId);
+  return buildGrabbelOrderGroups(getAllGrabbelOrders()).find(function (item) {
+    return safeText(item.deliveryId) === did &&
+      safeText(item.techniekerCode) === tcode;
+  }) || null;
+}
 
-  const techRef = safeText(payload.techRef);
-  const deliveryId = safeText(payload.deliveryId);
-  const opmerking = safeText(payload.opmerking);
-  const items = Array.isArray(payload.items) ? payload.items : [];
+function hasGrabbelOrderGroup(deliveryId, techniekerCode) {
+  return !!getGrabbelOrderGroup(deliveryId, techniekerCode);
+}
 
-  if (!techRef) throw new Error('Technieker ontbreekt.');
-  if (!deliveryId) throw new Error('Beleveringsmoment ontbreekt.');
+/* ---------------------------------------------------------
+   Normalization / validation
+   --------------------------------------------------------- */
 
-  const selectedItems = items
-    .map(item => ({
-      articleCode: safeText(item.articleCode),
-      aantalDozen: safeNumber(item.aantalDozen, 0)
-    }))
-    .filter(item => item.articleCode && item.aantalDozen > 0);
+function normalizeGrabbelOrderLines_(lines) {
+  return (Array.isArray(lines) ? lines : []).map(function (line) {
+    var gevraagd = safeNumber(line.gevraagdAantal || line.gevraagd || line.requestedQty, 0);
+    var voorzien =
+      line.voorzienAantal === undefined || line.voorzienAantal === null || line.voorzienAantal === ''
+        ? gevraagd
+        : safeNumber(line.voorzienAantal || line.voorzien || line.preparedQty, 0);
 
-  if (!selectedItems.length) {
-    throw new Error('Vul minstens voor 1 artikel een aantal dozen in.');
+    return {
+      artikelCode: safeText(line.artikelCode || line.artikelNr),
+      artikelOmschrijving: safeText(line.artikelOmschrijving || line.artikel),
+      typeMateriaal: safeText(line.typeMateriaal || determineMaterialTypeFromArticle(safeText(line.artikelCode || line.artikelNr))),
+      eenheid: safeText(line.eenheid || line.unit || 'Stuk'),
+      gevraagdAantal: gevraagd,
+      voorzienAantal: voorzien,
+      ontvangenAantal: safeNumber(line.ontvangenAantal || line.receivedQty, 0),
+      deltaAantal: safeNumber(line.deltaAantal, voorzien - gevraagd),
+      redenDelta: safeText(line.redenDelta || line.deltaReason),
+      opmerking: safeText(line.opmerking),
+    };
+  });
+}
+
+function validateGrabbelOrderLinesForTechnician_(lines) {
+  if (!lines.length) {
+    throw new Error('Geen bestellijnen ontvangen.');
   }
 
-  const technicians = readObjectsSafe(TABS.TECHNICIANS).map(mapTechnician);
-  const technician = findTechnicianByRef(technicians, techRef);
-  if (!technician) throw new Error('Technieker niet gevonden.');
-
-  const delivery = getAllDeliveries()
-    .find(d => d.beleveringId === deliveryId && deliveryMatchesTechnician(d, technician));
-
-  if (!delivery) throw new Error('Beleveringsmoment niet gevonden.');
-  if (isDeliveryCutoffPassed(delivery)) {
-    throw new Error('Bestellen voor dit beleveringsmoment kan niet meer.');
-  }
-
-  const existingOrders = getOrdersForTechnician(technician.code);
-  if (hasExistingOrderForDelivery(existingOrders, delivery)) {
-    throw new Error('Voor dit beleveringsmoment bestaat al een bestelling.');
-  }
-
-  const stockMap = buildStockMapForOrdering();
-  const timestamp = nowStamp();
-  const baseBestellingId = makeOrderId();
-
-  const rows = buildOrderRows(
-    technician,
-    delivery,
-    stockMap,
-    selectedItems,
-    opmerking,
-    timestamp,
-    baseBestellingId
-  );
-
-  appendRows(TABS.ORDERS, rows);
-  rebuildTotalsSheet();
-
-  writeAudit(
-    'Bestelling aangemaakt',
-    access.user.rol,
-    access.user.naam || access.user.techniekerCode || access.user.email,
-    'BestellingGroep',
-    baseBestellingId,
-    {
-      techniekerCode: technician.code,
-      beleveringId: delivery.beleveringId,
-      lijnen: rows.length,
-      opmerking: opmerking
+  lines.forEach(function (line, index) {
+    var rowNr = index + 1;
+    if (!safeText(line.artikelCode)) {
+      throw new Error('Artikelcode ontbreekt op lijn ' + rowNr + '.');
     }
-  );
-
-  pushWarehouseNotification(
-    'NieuweGrabbelstockBestelling',
-    'Nieuwe grabbelstock bestelling',
-    `${technician.naam} plaatste een grabbelstock bestelling voor ${delivery.datumDisplay} ${delivery.tijdslot}.`,
-    'BestellingGroep',
-    delivery.beleveringId || baseBestellingId
-  );
-
-  return {
-    success: true,
-    bestellingId: baseBestellingId,
-    lines: rows.length,
-    message: 'Bestelling opgeslagen.'
-  };
-}
-
-function updateTechnicianOrderGroup(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertTechnicianAccessToRef(safeText(payload.techRef), sessionId);
-
-  const techRef = safeText(payload.techRef);
-  const deliveryId = safeText(payload.deliveryId);
-  const opmerking = safeText(payload.opmerking);
-  const items = Array.isArray(payload.items) ? payload.items : [];
-
-  const selectedItems = items
-    .map(item => ({
-      articleCode: safeText(item.articleCode),
-      aantalDozen: safeNumber(item.aantalDozen, 0)
-    }))
-    .filter(item => item.articleCode && item.aantalDozen > 0);
-
-  if (!selectedItems.length) {
-    throw new Error('De aangepaste bestelling moet minstens 1 artikellijn bevatten.');
-  }
-
-  const technicians = readObjectsSafe(TABS.TECHNICIANS).map(mapTechnician);
-  const technician = findTechnicianByRef(technicians, techRef);
-  if (!technician) throw new Error('Technieker niet gevonden.');
-
-  const delivery = getAllDeliveries()
-    .find(d => d.beleveringId === deliveryId && deliveryMatchesTechnician(d, technician));
-
-  if (!delivery) throw new Error('Beleveringsmoment niet gevonden.');
-  if (isDeliveryCutoffPassed(delivery)) {
-    throw new Error('Bestellen voor dit beleveringsmoment kan niet meer.');
-  }
-
-  const sheet = getSheetOrThrow(TABS.ORDERS);
-  const values = sheet.getDataRange().getValues();
-  if (!values.length) throw new Error('Tab Bestellingen is leeg.');
-
-  const headers = values[0].map(h => safeText(h));
-  const col = getColMap(headers);
-  const rows = values.slice(1);
-
-  const targetRows = rows.filter(row =>
-    normalizeRef(safeText(row[col['TechniekerCode']])) === normalizeRef(technician.code) &&
-    safeText(row[col['BeleveringID']]) === deliveryId
-  );
-
-  if (!targetRows.length) {
-    throw new Error('Er bestaat nog geen bestelling om aan te passen.');
-  }
-
-  if (targetRows.some(row => safeText(row[col['Status']]) !== STATUS.REQUESTED)) {
-    throw new Error('Deze bestelling is bevroren.');
-  }
-
-  const stockMap = buildStockMapForOrdering();
-
-  const remainingRows = rows.filter(row => !(
-    normalizeRef(safeText(row[col['TechniekerCode']])) === normalizeRef(technician.code) &&
-    safeText(row[col['BeleveringID']]) === deliveryId
-  ));
-
-  const newRows = buildOrderRows(
-    technician,
-    delivery,
-    stockMap,
-    selectedItems,
-    opmerking,
-    nowStamp(),
-    makeOrderId()
-  );
-
-  writeFullTable(TABS.ORDERS, headers, remainingRows.concat(newRows));
-  rebuildTotalsSheet();
-
-  writeAudit(
-    'Bestelling aangepast',
-    access.user.rol,
-    access.user.naam || access.user.techniekerCode || access.user.email,
-    'BestellingGroep',
-    deliveryId,
-    {
-      techniekerCode: technician.code,
-      beleveringId: deliveryId,
-      lijnen: newRows.length,
-      opmerking: opmerking
+    if (safeNumber(line.gevraagdAantal, 0) <= 0) {
+      throw new Error('Gevraagd aantal moet groter zijn dan 0 op lijn ' + rowNr + '.');
     }
-  );
+  });
 
-  return {
-    success: true,
-    lines: newRows.length,
-    message: 'Bestelling aangepast.'
-  };
+  return true;
 }
 
-function confirmTechnicianReceipt(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+function validateGrabbelOrderLinesForWarehouse_(lines) {
+  if (!lines.length) {
+    throw new Error('Geen bestellijnen ontvangen.');
+  }
 
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertTechnicianAccessToRef(safeText(payload.techRef), sessionId);
+  lines.forEach(function (line, index) {
+    var rowNr = index + 1;
+    if (!safeText(line.artikelCode)) {
+      throw new Error('Artikelcode ontbreekt op lijn ' + rowNr + '.');
+    }
+    if (safeNumber(line.voorzienAantal, 0) < 0) {
+      throw new Error('Voorzien aantal mag niet negatief zijn op lijn ' + rowNr + '.');
+    }
+    if (
+      safeNumber(line.voorzienAantal, 0) !== safeNumber(line.gevraagdAantal, 0) &&
+      !safeText(line.redenDelta)
+    ) {
+      throw new Error('Reden delta is verplicht op lijn ' + rowNr + '.');
+    }
+  });
 
-  const orderIds = Array.isArray(payload.orderIds) ? payload.orderIds.map(safeText).filter(Boolean) : [];
-  const techRef = safeText(payload.techRef);
-  const lines = Array.isArray(payload.lines) ? payload.lines : [];
+  return true;
+}
 
-  if (!orderIds.length) throw new Error('Geen orderIds ontvangen.');
-  if (!techRef) throw new Error('Technieker ontbreekt.');
+function assertDeliveryEditableForOrder_(delivery, techniekerCode, sessionId) {
+  if (!delivery) {
+    throw new Error('Belevering niet gevonden.');
+  }
 
-  const technicians = readObjectsSafe(TABS.TECHNICIANS).map(mapTechnician);
-  const technician = findTechnicianByRef(technicians, techRef);
-  if (!technician) throw new Error('Technieker niet gevonden.');
+  var access = assertTechnicianAccessToRef(sessionId, techniekerCode);
+  if (safeText(access.technician.code || access.technician.ref) !== safeText(techniekerCode)) {
+    throw new Error('Geen toegang tot deze technieker.');
+  }
 
-  const lineMap = {};
-  lines.forEach(line => {
-    const id = safeText(line.orderId);
-    if (!id) return;
+  var enriched = enrichDeliveryWithTiming(delivery);
+  if (enriched.cutoffPassed) {
+    throw new Error('Cutoff voor deze belevering is verstreken.');
+  }
+  if (enriched.isPast) {
+    throw new Error('Deze belevering ligt in het verleden.');
+  }
 
-    lineMap[id] = {
-      receivedOk: !!line.receivedOk,
-      ontvangenDozen: safeNumber(line.ontvangenDozen, 0),
-      verschilReden: safeText(line.verschilReden)
+  return enriched;
+}
+
+/* ---------------------------------------------------------
+   Internal write helper
+   --------------------------------------------------------- */
+
+function replaceGrabbelOrderGroup_(deliveryId, techniekerCode, lines, sharedFields) {
+  var table = getAllValues(getGrabbelOrderTab_());
+  var headerRow = table.length ? table[0] : null;
+  var currentRows = readObjectsSafe(getGrabbelOrderTab_());
+
+  var did = safeText(deliveryId);
+  var tcode = safeText(techniekerCode);
+
+  var kept = currentRows.filter(function (row) {
+    var mapped = mapGrabbelOrderRow(row);
+    return !(
+      safeText(mapped.deliveryId) === did &&
+      safeText(mapped.techniekerCode) === tcode
+    );
+  });
+
+  var newRows = lines.map(function (line) {
+    return {
+      OrderID: makeGrabbelOrderLineId_(),
+      DeliveryID: did,
+      TechniekerCode: tcode,
+      TechniekerNaam: safeText(sharedFields.techniekerNaam),
+      ArtikelCode: line.artikelCode,
+      ArtikelOmschrijving: line.artikelOmschrijving,
+      TypeMateriaal: line.typeMateriaal,
+      Eenheid: line.eenheid,
+      GevraagdAantal: line.gevraagdAantal,
+      VoorzienAantal: line.voorzienAantal,
+      OntvangenAantal: line.ontvangenAantal,
+      DeltaAantal: line.deltaAantal,
+      RedenDelta: line.redenDelta,
+      Opmerking: line.opmerking,
+      Status: safeText(sharedFields.status || getGrabbelOrderStatusOpen_()),
+      Actor: safeText(sharedFields.actor),
+      DocumentDatum: safeText(sharedFields.documentDatum),
+      DocumentDatumIso: safeText(sharedFields.documentDatumIso || sharedFields.documentDatum),
+      AangemaaktOp: safeText(sharedFields.aangemaaktOp),
+      AangemaaktOpRaw: safeText(sharedFields.aangemaaktOpRaw),
+      KlaargezetOp: safeText(sharedFields.klaargezetOp),
+      MeegegevenOp: safeText(sharedFields.meegegevenOp),
+      OntvangenOp: safeText(sharedFields.ontvangenOp),
+      GeslotenOp: safeText(sharedFields.geslotenOp),
     };
   });
 
-  const sheet = getSheetOrThrow(TABS.ORDERS);
-  const data = sheet.getDataRange().getValues();
-  if (!data.length) throw new Error('Tab Bestellingen is leeg.');
+  var finalObjects = kept.concat(newRows);
 
-  const headers = data[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  const idSet = {};
-  orderIds.forEach(id => { idSet[id] = true; });
-
-  let updated = 0;
-
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const currentId = safeText(row[col['BestellingID']]);
-
-    if (!idSet[currentId]) continue;
-    if (normalizeRef(safeText(row[col['TechniekerCode']])) !== normalizeRef(technician.code)) continue;
-
-    const currentStatus = safeText(row[col['Status']]);
-    if (!(currentStatus === STATUS.DISPATCHED || currentStatus === STATUS.AUTO_RECEIVED)) continue;
-
-    const providedDozen = safeNumber(row[col['AantalDozenVoorzien']], 0);
-    const input = lineMap[currentId] || null;
-
-    let exactReceived = true;
-    let ontvangenDozen = providedDozen;
-    let verschilReden = '';
-
-    if (providedDozen > 0 && input) {
-      exactReceived = !!input.receivedOk;
-      ontvangenDozen = exactReceived ? providedDozen : safeNumber(input.ontvangenDozen, 0);
-      verschilReden = safeText(input.verschilReden);
-
-      if (!exactReceived) {
-        if (ontvangenDozen < 0) {
-          throw new Error('Ontvangen dozen mag niet negatief zijn.');
-        }
-
-        if (ontvangenDozen >= providedDozen) {
-          throw new Error('Bij een verschil moet ontvangen lager zijn dan voorzien.');
-        }
-
-        if (!verschilReden) {
-          throw new Error('Verschilreden ontbreekt.');
-        }
-
-        if (!TECHNICIAN_RECEIPT_DIFF_REASONS.includes(verschilReden)) {
-          throw new Error('Ongeldige verschilreden.');
-        }
-      }
-    }
-
-    row[col['TechniekerLijnOntvangen']] = exactReceived ? 'Ja' : 'Nee';
-    row[col['TechniekerOntvangenDozen']] = ontvangenDozen;
-    row[col['TechniekerVerschilReden']] = verschilReden;
-    row[col['Status']] = STATUS.RECEIVED;
-    row[col['OntvangenDoorTechnieker']] = 'Ja';
-    row[col['OntvangenOp']] = nowStamp();
-    row[col['OntvangenType']] = 'Bevestigd door technieker';
-    row[col['ManagerGoedkeuringStatus']] = MANAGER_STATUS.PENDING;
-    if (col['LaatsteUpdate'] !== undefined) row[col['LaatsteUpdate']] = nowStamp();
-
-    data[i] = row;
-    updated++;
-  }
-
-  if (!updated) {
-    throw new Error('Geen lijnen gevonden voor ontvangst.');
-  }
-
-  if (data.length > 1) {
-    sheet.getRange(2, 1, data.length - 1, data[0].length).setValues(data.slice(1));
-  }
-
-  const firstOrder = getAllGrabbelOrders().find(x => orderIds.includes(x.bestellingId));
-
-  if (firstOrder) {
-    pushManagerNotification(
-      'OntvangstTeControleren',
-      'Technieker bevestigde ontvangst',
-      `${firstOrder.techniekerNaam} bevestigde ontvangst voor belevering ${firstOrder.klaarTegenLabel}. Managercontrole is nodig.`,
-      'BestellingGroep',
-      firstOrder.beleveringId || firstOrder.bestellingId
+  if (!headerRow && finalObjects.length) {
+    appendObjects(getGrabbelOrderTab_(), newRows);
+  } else if (headerRow) {
+    writeFullTable(
+      getGrabbelOrderTab_(),
+      headerRow,
+      finalObjects.map(function (obj) {
+        return buildRowFromHeaders(headerRow, obj);
+      })
     );
+  } else if (newRows.length) {
+    appendObjects(getGrabbelOrderTab_(), newRows);
   }
 
-  writeAudit(
-    'Ontvangst bevestigd door technieker',
-    access.user.rol,
-    access.user.naam || access.user.techniekerCode || access.user.email,
-    'BestellingGroep',
-    firstOrder ? (firstOrder.beleveringId || firstOrder.bestellingId) : orderIds.join(', '),
-    { lijnen: updated }
-  );
-
-  return {
-    success: true,
-    updated,
-    message: 'Ontvangst bevestigd.'
-  };
+  return getGrabbelOrderGroup(did, tcode);
 }
 
-function savePreparationBatch(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+/* ---------------------------------------------------------
+   Technician flow
+   --------------------------------------------------------- */
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertWarehouseAccess(sessionId);
+function submitOrder(payload) {
+  payload = payload || {};
 
-  const actor = safeText(payload.actor || user.naam || 'Magazijn');
-  const lines = Array.isArray(payload.lines) ? payload.lines : [];
+  var sessionId = getPayloadSessionId(payload);
+  var techniekerCode = safeText(
+    payload.techniekerCode ||
+    payload.technicianCode ||
+    payload.techCode
+  );
+  var deliveryId = safeText(payload.deliveryId);
+  if (!techniekerCode) throw new Error('TechniekerCode ontbreekt.');
+  if (!deliveryId) throw new Error('DeliveryId ontbreekt.');
 
-  if (!lines.length) {
-    throw new Error('Geen lijnen ontvangen.');
-  }
+  var actorAccess = assertTechnicianAccessToRef(sessionId, techniekerCode);
+  var delivery = assertDeliveryEditableForOrder_(
+    getDeliverySlotById(deliveryId),
+    techniekerCode,
+    sessionId
+  );
 
-  const sheet = getSheetOrThrow(TABS.ORDERS);
-  const data = sheet.getDataRange().getValues();
-  if (!data.length) throw new Error('Tab Bestellingen is leeg.');
+  var lines = normalizeGrabbelOrderLines_(payload.lines);
+  validateGrabbelOrderLinesForTechnician_(lines);
 
-  const headers = data[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  let updated = 0;
-
-  lines.forEach(line => {
-    const orderId = safeText(line.orderId);
-    const rowIndex = data.findIndex((row, i) => i > 0 && safeText(row[col['BestellingID']]) === orderId);
-    if (rowIndex === -1) return;
-
-    const row = data[rowIndex];
-    const currentStatus = safeText(row[col['Status']]);
-
-    if (currentStatus !== STATUS.REQUESTED && currentStatus !== STATUS.READY) {
-      return;
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var group = replaceGrabbelOrderGroup_(
+    deliveryId,
+    techniekerCode,
+    lines.map(function (line) {
+      return Object.assign({}, line, {
+        voorzienAantal: line.gevraagdAantal,
+        ontvangenAantal: 0,
+        deltaAantal: 0,
+        redenDelta: '',
+      });
+    }),
+    {
+      techniekerNaam: safeText(delivery.techniekerNaam || actorAccess.technician.naam),
+      status: getGrabbelOrderStatusOpen_(),
+      actor: safeText(actorAccess.user.naam || actorAccess.user.email),
+      documentDatum: safeText(delivery.datumIso),
+      documentDatumIso: safeText(delivery.datumIso),
+      aangemaaktOp: toDisplayDateTime(nowRaw),
+      aangemaaktOpRaw: nowRaw,
+      klaargezetOp: '',
+      meegegevenOp: '',
+      ontvangenOp: '',
+      geslotenOp: '',
     }
+  );
 
-    const gevraagdDozen = safeNumber(row[col['AantalDozen']], 0);
-    const gevraagdStuks = safeNumber(row[col['TotaalStuks']], 0);
-    const pick = safeNumber(row[col['Pick']], 0);
-
-    const inKarretje = line.inKarretje ? 'Ja' : 'Nee';
-    let aantalDozenVoorzien = safeNumber(line.aantalDozenVoorzien, 0);
-    let redenDelta = safeText(line.redenDelta);
-
-    if (inKarretje === 'Ja') {
-      aantalDozenVoorzien = gevraagdDozen;
-      redenDelta = '';
-    } else {
-      if (aantalDozenVoorzien < 0) {
-        throw new Error(`Negatief voorzien aantal bij order ${orderId}.`);
-      }
-
-      if (aantalDozenVoorzien >= gevraagdDozen) {
-        throw new Error(`Bij niet-afgevinkt moet voorzien lager zijn dan gevraagd bij order ${orderId}.`);
-      }
-
-      if (!PREPARATION_DELTA_REASONS.includes(redenDelta)) {
-        throw new Error(`Ongeldige reden bij order ${orderId}.`);
-      }
-    }
-
-    const voorzienStuks = pick * aantalDozenVoorzien;
-
-    row[col['AantalDozenVoorzien']] = aantalDozenVoorzien;
-    row[col['TotaalStuksVoorzien']] = voorzienStuks;
-    row[col['DeltaDozen']] = gevraagdDozen - aantalDozenVoorzien;
-    row[col['DeltaStuks']] = gevraagdStuks - voorzienStuks;
-    row[col['RedenDelta']] = redenDelta;
-    row[col['InKarretje']] = inKarretje;
-
-    if (col['LaatsteUpdate'] !== undefined) row[col['LaatsteUpdate']] = nowStamp();
-    if (col['InKarretjeDoor'] !== undefined) row[col['InKarretjeDoor']] = inKarretje === 'Ja' ? actor : '';
-    if (col['InKarretjeOp'] !== undefined) row[col['InKarretjeOp']] = inKarretje === 'Ja' ? nowStamp() : '';
-
-    data[rowIndex] = row;
-    updated++;
+  writeAudit({
+    actie: 'SUBMIT_GRABBEL_ORDER',
+    actor: actorAccess.user,
+    documentType: 'GrabbelOrderGroup',
+    documentId: deliveryId + ':' + techniekerCode,
+    details: {
+      lineCount: lines.length,
+      deliveryId: deliveryId,
+      techniekerCode: techniekerCode,
+    },
   });
 
-  if (!updated) {
-    throw new Error('Geen lijnen bijgewerkt.');
+  if (typeof pushWarehouseNotification === 'function') {
+    pushWarehouseNotification(
+      'GrabbelOrder',
+      'Nieuwe grabbelbestelling',
+      'Er werd een nieuwe grabbelbestelling ingediend.',
+      'GrabbelOrder',
+      deliveryId + ':' + techniekerCode,
+      'WAREHOUSE'
+    );
   }
 
-  if (data.length > 1) {
-    sheet.getRange(2, 1, data.length - 1, data[0].length).setValues(data.slice(1));
-  }
-
-  writeAudit(
-    'Voorbereidingslijnen opgeslagen',
-    user.rol,
-    actor,
-    'BestellingLijnen',
-    lines.map(x => safeText(x.orderId)).join(', '),
-    { lijnen: lines.length }
-  );
-
-  return {
-    success: true,
-    updated,
-    message: 'Voorbereidingslijnen opgeslagen.'
-  };
+  return group;
 }
 
-function updateWarehouseGroupStatus(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+function updateTechnicianOrderGroup(payload) {
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertWarehouseAccess(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var techniekerCode = safeText(
+    payload.techniekerCode ||
+    payload.technicianCode ||
+    payload.techCode
+  );
+  var deliveryId = safeText(payload.deliveryId);
+  if (!techniekerCode) throw new Error('TechniekerCode ontbreekt.');
+  if (!deliveryId) throw new Error('DeliveryId ontbreekt.');
 
-  const orderIds = Array.isArray(payload.orderIds) ? payload.orderIds.map(safeText).filter(Boolean) : [];
-  const status = safeText(payload.status);
-  const actor = safeText(payload.actor || user.naam || 'Magazijn');
-  const note = safeText(payload.note);
+  var access = assertTechnicianAccessToRef(sessionId, techniekerCode);
+  var existing = getGrabbelOrderGroup(deliveryId, techniekerCode);
+  if (!existing) throw new Error('Bestelgroep niet gevonden.');
 
-  if (!orderIds.length) throw new Error('Geen orderIds ontvangen.');
-  if (![STATUS.READY, STATUS.DISPATCHED, STATUS.NOT_PICKED].includes(status)) {
-    throw new Error('Ongeldige status.');
+  var status = safeText(existing.status);
+  if ([getGrabbelOrderStatusPrepared_(), getGrabbelOrderStatusGiven_(), getGrabbelOrderStatusReceived_(), getGrabbelOrderStatusClosed_()].indexOf(status) >= 0) {
+    throw new Error('Bestelgroep is niet meer wijzigbaar.');
   }
 
-  const sheet = getSheetOrThrow(TABS.ORDERS);
-  const data = sheet.getDataRange().getValues();
-  if (!data.length) throw new Error('Tab Bestellingen is leeg.');
+  assertDeliveryEditableForOrder_(getDeliverySlotById(deliveryId), techniekerCode, sessionId);
 
-  const headers = data[0].map(h => safeText(h));
-  const col = getColMap(headers);
+  var lines = normalizeGrabbelOrderLines_(payload.lines);
+  validateGrabbelOrderLinesForTechnician_(lines);
 
-  const idSet = {};
-  orderIds.forEach(id => { idSet[id] = true; });
-
-  let updated = 0;
-
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const currentId = safeText(row[col['BestellingID']]);
-    if (!idSet[currentId]) continue;
-
-    row[col['Status']] = status;
-    if (col['LaatsteUpdate'] !== undefined) row[col['LaatsteUpdate']] = nowStamp();
-    if (col['NotitieMagazijn'] !== undefined) row[col['NotitieMagazijn']] = note;
-
-    if (status === STATUS.READY) {
-      if (col['KlaargezetDoor'] !== undefined) row[col['KlaargezetDoor']] = actor;
-      if (col['KlaargezetOp'] !== undefined) row[col['KlaargezetOp']] = nowStamp();
-    }
-
-    if (status === STATUS.DISPATCHED) {
-      if (col['MeegegevenDoor'] !== undefined) row[col['MeegegevenDoor']] = actor;
-      if (col['MeegegevenOp'] !== undefined) row[col['MeegegevenOp']] = nowStamp();
-    }
-
-    data[i] = row;
-    updated++;
-  }
-
-  if (!updated) {
-    throw new Error('Geen lijnen gevonden.');
-  }
-
-  if (data.length > 1) {
-    sheet.getRange(2, 1, data.length - 1, data[0].length).setValues(data.slice(1));
-  }
-
-  const firstOrder = getAllGrabbelOrders().find(x => orderIds.includes(x.bestellingId));
-
-  if (updated && status === STATUS.READY && firstOrder) {
-    pushTechnicianNotification(
-      firstOrder.techniekerCode,
-      firstOrder.techniekerNaam,
-      'LeveringKlaargezet',
-      'Je levering staat klaar',
-      `Je belevering van ${firstOrder.klaarTegenLabel} staat op Klaargezet.`,
-      'BestellingGroep',
-      firstOrder.beleveringId || firstOrder.bestellingId
-    );
-  }
-
-  if (updated && status === STATUS.DISPATCHED && firstOrder) {
-    pushTechnicianNotification(
-      firstOrder.techniekerCode,
-      firstOrder.techniekerNaam,
-      'LeveringMeegegeven',
-      'Je levering is meegegeven',
-      `Je belevering van ${firstOrder.klaarTegenLabel} is meegegeven. Bevestig ontvangst zodra je alles ontvangen hebt.`,
-      'BestellingGroep',
-      firstOrder.beleveringId || firstOrder.bestellingId
-    );
-  }
-
-  writeAudit(
-    'Beleveringsstatus gewijzigd',
-    user.rol,
-    actor,
-    'BestellingGroep',
-    firstOrder ? (firstOrder.beleveringId || firstOrder.bestellingId) : orderIds.join(', '),
+  var preservedFirst = existing.lines[0] || {};
+  var group = replaceGrabbelOrderGroup_(
+    deliveryId,
+    techniekerCode,
+    lines.map(function (line) {
+      return Object.assign({}, line, {
+        voorzienAantal: line.gevraagdAantal,
+        ontvangenAantal: 0,
+        deltaAantal: 0,
+        redenDelta: '',
+      });
+    }),
     {
-      status: status,
-      lijnen: updated,
-      note: note
+      techniekerNaam: safeText(existing.techniekerNaam || access.technician.naam),
+      status: getGrabbelOrderStatusOpen_(),
+      actor: safeText(access.user.naam || access.user.email),
+      documentDatum: safeText(preservedFirst.documentDatum),
+      documentDatumIso: safeText(preservedFirst.documentDatumIso),
+      aangemaaktOp: safeText(preservedFirst.aangemaaktOp),
+      aangemaaktOpRaw: safeText(preservedFirst.aangemaaktOpRaw),
+      klaargezetOp: '',
+      meegegevenOp: '',
+      ontvangenOp: '',
+      geslotenOp: '',
     }
   );
 
-  return {
-    success: true,
-    updated,
-    status,
-    message: 'Beleveringsmoment bijgewerkt.'
-  };
+  writeAudit({
+    actie: 'UPDATE_GRABBEL_ORDER',
+    actor: access.user,
+    documentType: 'GrabbelOrderGroup',
+    documentId: deliveryId + ':' + techniekerCode,
+    details: {
+      lineCount: lines.length,
+    },
+  });
+
+  return group;
+}
+
+/* ---------------------------------------------------------
+   Warehouse flow
+   --------------------------------------------------------- */
+
+function prepareOrderGroup(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+  var deliveryId = safeText(payload.deliveryId);
+  var techniekerCode = safeText(payload.techniekerCode || payload.technicianCode || payload.techCode);
+  if (!deliveryId) throw new Error('DeliveryId ontbreekt.');
+  if (!techniekerCode) throw new Error('TechniekerCode ontbreekt.');
+
+  var existing = getGrabbelOrderGroup(deliveryId, techniekerCode);
+  if (!existing) throw new Error('Bestelgroep niet gevonden.');
+
+  var status = safeText(existing.status);
+  if ([getGrabbelOrderStatusGiven_(), getGrabbelOrderStatusReceived_(), getGrabbelOrderStatusClosed_()].indexOf(status) >= 0) {
+    throw new Error('Bestelgroep is niet meer wijzigbaar voor magazijn.');
+  }
+
+  var lines = normalizeGrabbelOrderLines_(payload.lines);
+  validateGrabbelOrderLinesForWarehouse_(lines);
+
+  var first = existing.lines[0] || {};
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+
+  var group = replaceGrabbelOrderGroup_(
+    deliveryId,
+    techniekerCode,
+    lines.map(function (line) {
+      return Object.assign({}, line, {
+        ontvangenAantal: 0,
+        deltaAantal: safeNumber(line.voorzienAantal, 0) - safeNumber(line.gevraagdAantal, 0),
+      });
+    }),
+    {
+      techniekerNaam: safeText(existing.techniekerNaam),
+      status: getGrabbelOrderStatusPrepared_(),
+      actor: safeText(actor.naam || actor.email),
+      documentDatum: safeText(first.documentDatum),
+      documentDatumIso: safeText(first.documentDatumIso),
+      aangemaaktOp: safeText(first.aangemaaktOp),
+      aangemaaktOpRaw: safeText(first.aangemaaktOpRaw),
+      klaargezetOp: toDisplayDateTime(nowRaw),
+      meegegevenOp: '',
+      ontvangenOp: '',
+      geslotenOp: '',
+    }
+  );
+
+  writeAudit({
+    actie: 'PREPARE_GRABBEL_ORDER',
+    actor: actor,
+    documentType: 'GrabbelOrderGroup',
+    documentId: deliveryId + ':' + techniekerCode,
+    details: {
+      lineCount: lines.length,
+    },
+  });
+
+  if (typeof pushTechnicianNotification === 'function') {
+    pushTechnicianNotification(
+      'GrabbelOrder',
+      'Bestelling klaargezet',
+      'Je grabbelbestelling werd klaargezet.',
+      'GrabbelOrder',
+      deliveryId + ':' + techniekerCode,
+      techniekerCode,
+      existing.techniekerNaam
+    );
+  }
+
+  return group;
+}
+
+function markOrderGroupGiven(payload) {
+  return updateGrabbelOrderGroupStatus_(payload, getGrabbelOrderStatusGiven_(), 'MeegegevenOp', 'MARK_GRABBEL_ORDER_GIVEN');
+}
+
+function markOrderGroupNotPickedUp(payload) {
+  return updateGrabbelOrderGroupStatus_(payload, getGrabbelOrderStatusNotPickedUp_(), '', 'MARK_GRABBEL_ORDER_NOT_PICKED_UP');
+}
+
+function updateGrabbelOrderGroupStatus_(payload, nextStatus, timestampField, auditAction) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+  var deliveryId = safeText(payload.deliveryId);
+  var techniekerCode = safeText(payload.techniekerCode || payload.technicianCode || payload.techCode);
+  if (!deliveryId) throw new Error('DeliveryId ontbreekt.');
+  if (!techniekerCode) throw new Error('TechniekerCode ontbreekt.');
+
+  var existing = getGrabbelOrderGroup(deliveryId, techniekerCode);
+  if (!existing) throw new Error('Bestelgroep niet gevonden.');
+
+  var first = existing.lines[0] || {};
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var stamp = toDisplayDateTime(nowRaw);
+
+  var group = replaceGrabbelOrderGroup_(
+    deliveryId,
+    techniekerCode,
+    existing.lines.map(function (line) {
+      return Object.assign({}, line);
+    }),
+    {
+      techniekerNaam: safeText(existing.techniekerNaam),
+      status: nextStatus,
+      actor: safeText(actor.naam || actor.email),
+      documentDatum: safeText(first.documentDatum),
+      documentDatumIso: safeText(first.documentDatumIso),
+      aangemaaktOp: safeText(first.aangemaaktOp),
+      aangemaaktOpRaw: safeText(first.aangemaaktOpRaw),
+      klaargezetOp: safeText(first.klaargezetOp),
+      meegegevenOp: timestampField === 'MeegegevenOp' ? stamp : safeText(first.meegegevenOp),
+      ontvangenOp: safeText(first.ontvangenOp),
+      geslotenOp: safeText(first.geslotenOp),
+    }
+  );
+
+  writeAudit({
+    actie: auditAction,
+    actor: actor,
+    documentType: 'GrabbelOrderGroup',
+    documentId: deliveryId + ':' + techniekerCode,
+    details: {
+      nextStatus: nextStatus,
+    },
+  });
+
+  return group;
+}
+
+/* ---------------------------------------------------------
+   Technician receipt / manager close
+   --------------------------------------------------------- */
+
+function confirmTechnicianReceipt(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var techniekerCode = safeText(
+    payload.techniekerCode ||
+    payload.technicianCode ||
+    payload.techCode
+  );
+  var deliveryId = safeText(payload.deliveryId);
+  if (!techniekerCode) throw new Error('TechniekerCode ontbreekt.');
+  if (!deliveryId) throw new Error('DeliveryId ontbreekt.');
+
+  var access = assertTechnicianAccessToRef(sessionId, techniekerCode);
+  var existing = getGrabbelOrderGroup(deliveryId, techniekerCode);
+  if (!existing) throw new Error('Bestelgroep niet gevonden.');
+
+  var allowedStatuses = [getGrabbelOrderStatusGiven_(), getGrabbelOrderStatusPrepared_()];
+  if (allowedStatuses.indexOf(safeText(existing.status)) < 0) {
+    throw new Error('Bestelgroep kan niet ontvangen worden vanuit status "' + safeText(existing.status) + '".');
+  }
+
+  var first = existing.lines[0] || {};
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var stamp = toDisplayDateTime(nowRaw);
+
+  var group = replaceGrabbelOrderGroup_(
+    deliveryId,
+    techniekerCode,
+    existing.lines.map(function (line) {
+      return Object.assign({}, line, {
+        ontvangenAantal: safeNumber(line.voorzienAantal, 0),
+      });
+    }),
+    {
+      techniekerNaam: safeText(existing.techniekerNaam || access.technician.naam),
+      status: getGrabbelOrderStatusReceived_(),
+      actor: safeText(access.user.naam || access.user.email),
+      documentDatum: safeText(first.documentDatum),
+      documentDatumIso: safeText(first.documentDatumIso),
+      aangemaaktOp: safeText(first.aangemaaktOp),
+      aangemaaktOpRaw: safeText(first.aangemaaktOpRaw),
+      klaargezetOp: safeText(first.klaargezetOp),
+      meegegevenOp: safeText(first.meegegevenOp),
+      ontvangenOp: stamp,
+      geslotenOp: '',
+    }
+  );
+
+  writeAudit({
+    actie: 'CONFIRM_GRABBEL_ORDER_RECEIPT',
+    actor: access.user,
+    documentType: 'GrabbelOrderGroup',
+    documentId: deliveryId + ':' + techniekerCode,
+    details: {},
+  });
+
+  if (typeof pushManagerNotification === 'function') {
+    pushManagerNotification(
+      'GrabbelOrder',
+      'Bestelling ontvangen door technieker',
+      'Een grabbelbestelling werd ontvangen en wacht op afsluiting.',
+      'GrabbelOrder',
+      deliveryId + ':' + techniekerCode,
+      'MANAGER'
+    );
+  }
+
+  return group;
 }
 
 function approveManagerGroup(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
+  payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const user = assertManagerAccess(sessionId);
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertManagerAccess(sessionId);
+  var deliveryId = safeText(payload.deliveryId);
+  var techniekerCode = safeText(payload.techniekerCode || payload.technicianCode || payload.techCode);
+  if (!deliveryId) throw new Error('DeliveryId ontbreekt.');
+  if (!techniekerCode) throw new Error('TechniekerCode ontbreekt.');
 
-  const orderIds = Array.isArray(payload.orderIds) ? payload.orderIds.map(safeText).filter(Boolean) : [];
-  const actor = safeText(payload.actor || user.naam || 'Manager');
-  const note = safeText(payload.note);
+  var existing = getGrabbelOrderGroup(deliveryId, techniekerCode);
+  if (!existing) throw new Error('Bestelgroep niet gevonden.');
 
-  if (!orderIds.length) {
-    throw new Error('Geen orderIds ontvangen.');
+  var allowedStatuses = [getGrabbelOrderStatusReceived_(), getGrabbelOrderStatusNotPickedUp_()];
+  if (allowedStatuses.indexOf(safeText(existing.status)) < 0) {
+    throw new Error('Manager kan deze bestelgroep nog niet afsluiten.');
   }
 
-  const sheet = getSheetOrThrow(TABS.ORDERS);
-  const data = sheet.getDataRange().getValues();
-  if (!data.length) throw new Error('Tab Bestellingen is leeg.');
+  var first = existing.lines[0] || {};
+  var nowRaw = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+  var stamp = toDisplayDateTime(nowRaw);
 
-  const headers = data[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  const idSet = {};
-  orderIds.forEach(id => { idSet[id] = true; });
-
-  let updated = 0;
-  let bronId = '';
-  let techniekerNaam = '';
-  let klaarTegenLabel = '';
-
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const currentId = safeText(row[col['BestellingID']]);
-    if (!idSet[currentId]) continue;
-
-    if (!bronId) bronId = safeText(row[col['BeleveringID']]) || currentId;
-    if (!techniekerNaam) techniekerNaam = safeText(row[col['TechniekerNaam']]);
-    if (!klaarTegenLabel) {
-      klaarTegenLabel = `${toDisplayDate(row[col['BeleveringDatum']])} ${normalizeTime(row[col['BeleveringUur']])}`.trim();
-    }
-
-    row[col['ManagerGoedkeuringStatus']] = MANAGER_STATUS.APPROVED;
-    row[col['ManagerGoedgekeurdDoor']] = actor;
-    row[col['ManagerGoedgekeurdOp']] = nowStamp();
-    row[col['ManagerOpmerking']] = note;
-    row[col['Status']] = STATUS.APPROVED;
-    if (col['LaatsteUpdate'] !== undefined) row[col['LaatsteUpdate']] = nowStamp();
-
-    data[i] = row;
-    updated++;
-  }
-
-  if (!updated) {
-    throw new Error('Geen lijnen gevonden voor goedkeuring.');
-  }
-
-  if (data.length > 1) {
-    sheet.getRange(2, 1, data.length - 1, data[0].length).setValues(data.slice(1));
-  }
-
-  if (bronId) {
-    markManagerNotificationsBySource('BestellingGroep', bronId);
-
-    pushWarehouseNotification(
-      'LeveringGoedgekeurd',
-      'Grabbelstock levering goedgekeurd',
-      `${techniekerNaam || 'Technieker'} - belevering ${klaarTegenLabel || bronId} is door de manager goedgekeurd.`,
-      'BestellingGroep',
-      bronId
-    );
-  }
-
-  writeAudit(
-    'Grabbelstock levering goedgekeurd',
-    user.rol,
-    actor,
-    'BestellingGroep',
-    bronId || orderIds.join(', '),
+  var group = replaceGrabbelOrderGroup_(
+    deliveryId,
+    techniekerCode,
+    existing.lines.map(function (line) {
+      return Object.assign({}, line);
+    }),
     {
-      lijnen: updated,
-      note: note
+      techniekerNaam: safeText(existing.techniekerNaam),
+      status: getGrabbelOrderStatusClosed_(),
+      actor: safeText(actor.naam || actor.email),
+      documentDatum: safeText(first.documentDatum),
+      documentDatumIso: safeText(first.documentDatumIso),
+      aangemaaktOp: safeText(first.aangemaaktOp),
+      aangemaaktOpRaw: safeText(first.aangemaaktOpRaw),
+      klaargezetOp: safeText(first.klaargezetOp),
+      meegegevenOp: safeText(first.meegegevenOp),
+      ontvangenOp: safeText(first.ontvangenOp),
+      geslotenOp: stamp,
     }
   );
 
+  if (typeof markNotificationsProcessedBySource === 'function') {
+    markNotificationsProcessedBySource({
+      sessionId: sessionId,
+      bronType: 'GrabbelOrder',
+      bronId: deliveryId + ':' + techniekerCode,
+    });
+  }
+
+  writeAudit({
+    actie: 'CLOSE_GRABBEL_ORDER_GROUP',
+    actor: actor,
+    documentType: 'GrabbelOrderGroup',
+    documentId: deliveryId + ':' + techniekerCode,
+    details: {},
+  });
+
+  return group;
+}
+
+/* ---------------------------------------------------------
+   Auto confirm helper
+   --------------------------------------------------------- */
+
+function autoConfirmAfter3Hours(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+  var now = new Date();
+  var groups = buildGrabbelOrderGroups(getAllGrabbelOrders());
+  var updated = [];
+
+  groups.forEach(function (group) {
+    if (safeText(group.status) !== getGrabbelOrderStatusGiven_()) {
+      return;
+    }
+
+    var first = group.lines[0] || {};
+    var meegegevenOp = safeText(first.meegegevenOp);
+    if (!meegegevenOp) {
+      return;
+    }
+
+    var dt = new Date(meegegevenOp);
+    if (isNaN(dt.getTime())) {
+      return;
+    }
+
+    var diffMs = now.getTime() - dt.getTime();
+    if (diffMs < 3 * 60 * 60 * 1000) {
+      return;
+    }
+
+    var result = replaceGrabbelOrderGroup_(
+      group.deliveryId,
+      group.techniekerCode,
+      group.lines.map(function (line) {
+        return Object.assign({}, line, {
+          ontvangenAantal: safeNumber(line.voorzienAantal, 0),
+        });
+      }),
+      {
+        techniekerNaam: safeText(group.techniekerNaam),
+        status: getGrabbelOrderStatusReceived_(),
+        actor: safeText(actor.naam || actor.email),
+        documentDatum: safeText(first.documentDatum),
+        documentDatumIso: safeText(first.documentDatumIso),
+        aangemaaktOp: safeText(first.aangemaaktOp),
+        aangemaaktOpRaw: safeText(first.aangemaaktOpRaw),
+        klaargezetOp: safeText(first.klaargezetOp),
+        meegegevenOp: safeText(first.meegegevenOp),
+        ontvangenOp: Utilities.formatDate(now, TIMEZONE, 'dd/MM/yyyy HH:mm:ss'),
+        geslotenOp: '',
+      }
+    );
+
+    updated.push({
+      deliveryId: group.deliveryId,
+      techniekerCode: group.techniekerCode,
+      status: result.status,
+    });
+  });
+
+  if (updated.length) {
+    writeAudit({
+      actie: 'AUTO_CONFIRM_GRABBEL_AFTER_3_HOURS',
+      actor: actor,
+      documentType: 'GrabbelOrderGroup',
+      documentId: 'AUTO',
+      details: {
+        updatedCount: updated.length,
+      },
+    });
+  }
+
   return {
-    success: true,
-    updated,
-    message: 'Goedgekeurd.'
+    updatedCount: updated.length,
+    items: updated,
   };
 }
 
-function autoConfirmAfter3Hours() {
-  const sheet = getSheetOrThrow(TABS.ORDERS);
-  const data = sheet.getDataRange().getValues();
-  if (!data.length) return { success: true, updated: 0, message: 'Geen bestellingen.' };
+/* ---------------------------------------------------------
+   Screen queries
+   --------------------------------------------------------- */
 
-  const headers = data[0].map(h => safeText(h));
-  const col = getColMap(headers);
-
-  const now = nowDate();
-  let updated = 0;
-  const affectedGroupIds = {};
-
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    const status = safeText(row[col['Status']]);
-    const meegegevenOp = row[col['MeegegevenOp']];
-    const ontvangen = safeText(row[col['OntvangenDoorTechnieker']]);
-
-    if (status !== STATUS.DISPATCHED || !meegegevenOp || ontvangen === 'Ja') continue;
-
-    const meegegevenDate = new Date(meegegevenOp);
-    if (isNaN(meegegevenDate)) continue;
-
-    if (now.getTime() - meegegevenDate.getTime() < 3 * 60 * 60 * 1000) continue;
-
-    row[col['Status']] = STATUS.AUTO_RECEIVED;
-    row[col['OntvangenDoorTechnieker']] = 'Nee';
-    row[col['OntvangenOp']] = nowStamp();
-    row[col['OntvangenType']] = 'Automatisch na 3u';
-    row[col['ManagerGoedkeuringStatus']] = MANAGER_STATUS.PENDING;
-    if (col['LaatsteUpdate'] !== undefined) row[col['LaatsteUpdate']] = nowStamp();
-
-    data[i] = row;
-
-    const bronId = safeText(row[col['BeleveringID']]) || safeText(row[col['BestellingID']]);
-    if (bronId) affectedGroupIds[bronId] = true;
-    updated++;
-  }
-
-  if (updated && data.length > 1) {
-    sheet.getRange(2, 1, data.length - 1, data[0].length).setValues(data.slice(1));
-  }
-
-  Object.keys(affectedGroupIds).forEach(bronId => {
-    pushManagerNotification(
-      'AutoOntvangst',
-      'Automatische ontvangst na 3 uur',
-      `Belevering ${bronId} is automatisch ontvangen gemarkeerd omdat de technieker niet tijdig bevestigde.`,
-      'BestellingGroep',
-      bronId
-    );
-  });
-
-  if (updated) {
-    writeSystemAudit(
-      'Automatische ontvangst na 3 uur',
-      'BestellingGroep',
-      Object.keys(affectedGroupIds).join(', '),
-      {
-        groepen: Object.keys(affectedGroupIds).length,
-        lijnen: updated
-      }
-    );
-  }
+function buildTechnicianGrabbelView_(techniekerCode) {
+  var deliveries = getUpcomingDeliveriesForTechnician(techniekerCode, 7);
+  var groups = buildGrabbelOrderGroups(getGrabbelOrdersByTechnicianCode(techniekerCode));
 
   return {
-    success: true,
-    updated,
-    message: 'Automatische ontvangstcontrole uitgevoerd.'
+    plannedDeliveries: deliveries.map(function (delivery) {
+      return Object.assign({}, delivery, {
+        hasExistingOrder: hasExistingOrderForDelivery(techniekerCode, delivery.deliveryId),
+      });
+    }),
+    deliveryGroups: groups,
+  };
+}
+
+function getAppData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var techniekerCode = safeText(
+    payload.techniekerCode ||
+    payload.technicianCode ||
+    payload.techCode
+  );
+
+  var access = assertTechnicianAccessToRef(sessionId, techniekerCode);
+  var techCode = safeText(access.technician.code || access.technician.ref);
+
+  var techView = buildTechnicianGrabbelView_(techCode);
+  var notifications =
+    typeof getNotificationsData === 'function'
+      ? getNotificationsData({ sessionId: sessionId }).items
+      : [];
+
+  return {
+    techniekerCode: techCode,
+    techniekerNaam: safeText(access.technician.naam),
+    plannedDeliveries: techView.plannedDeliveries,
+    deliveryGroups: techView.deliveryGroups,
+    notifications: notifications,
+    busCounts: [],
+    mobileRequests: [],
+  };
+}
+
+function getWarehouseData(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var actor = assertWarehouseAccess(sessionId);
+  var groups = getUpcomingDeliveryGroups(7);
+  var notifications =
+    typeof getNotificationsData === 'function'
+      ? getNotificationsData({ sessionId: sessionId }).items
+      : [];
+
+  return {
+    actor: {
+      naam: safeText(actor.naam),
+      rol: safeText(actor.rol),
+    },
+    deliveryGroups: groups,
+    summary: buildDeliverySummary(groups),
+    notifications: notifications,
   };
 }

@@ -1,0 +1,71 @@
+<!-- _mobilewarehouse_notifications.html
+     Mobile warehouse notifications partial
+-->
+<div class="card">
+  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+    <div>
+      <h3 class="section-title" style="margin-bottom: 4px;">Meldingen</h3>
+      <div class="muted">
+        Overzicht van open, gelezen en verwerkte meldingen voor mobiel magazijn.
+      </div>
+    </div>
+
+    <div class="row">
+      <button type="button" class="secondary" onclick="loadMobileWarehouseData({ showBusyOverlay: true })">
+        Vernieuwen
+      </button>
+      <button
+        type="button"
+        class="secondary"
+        onclick="if (typeof markAllMobileNotificationsRead === 'function') markAllMobileNotificationsRead();"
+      >
+        Alles als gelezen
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="grid three">
+    <div>
+      <label for="mobileNotificationSearch">Zoeken</label>
+      <input
+        id="mobileNotificationSearch"
+        type="text"
+        placeholder="Titel, bericht of type"
+        oninput="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      />
+    </div>
+
+    <div>
+      <label for="mobileNotificationStatusFilter">Status</label>
+      <select
+        id="mobileNotificationStatusFilter"
+        onchange="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      >
+        <option value="">Alle statussen</option>
+        <option value="Open">Open</option>
+        <option value="Gelezen">Gelezen</option>
+        <option value="Verwerkt">Verwerkt</option>
+        <option value="Gesloten">Gesloten</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="mobileNotificationOnlyUnread">Filter</label>
+      <select
+        id="mobileNotificationOnlyUnread"
+        onchange="if (typeof renderMobileWarehouseData === 'function') renderMobileWarehouseData(window.APP_STATE.mobileWarehouseData || null);"
+      >
+        <option value="">Alles tonen</option>
+        <option value="unread">Enkel ongelezen</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="muted" style="margin-top: 12px;">
+    Meldingafhandeling blijft centraal in de notificationservice; deze partial is enkel de UI-shell.
+  </div>
+</div>
+
+<div id="mobileNotificationsTable"></div>

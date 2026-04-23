@@ -1,54 +1,109 @@
 <!DOCTYPE html>
 <html>
-  <?!= include('_shared_shell_head', model) ?>
+  <head>
+    <?!= include('_shared_shell_head', model) ?>
+    <script>
+      window.BOOTSTRAP_MODEL = <?= JSON.stringify(model || {}) ?>;
+      window.BOOTSTRAP_SESSION_ID = <?= JSON.stringify((model && (model.bootstrapSessionId || model.currentSessionId || model.sessionId)) || '') ?>;
+      window.CURRENT_SESSION_ID = window.BOOTSTRAP_SESSION_ID;
+    </script>
+  </head>
+  <body class="<?= (model && model.bodyClass) || 'page-warehouse' ?>">
+    <div id="warehouseApp" class="app-shell app-shell-warehouse">
+      <div class="app-container">
+        <header class="app-page-header">
+          <div class="app-page-title-wrap">
+            <h1 class="app-page-title"><?= (model && model.pageTitle) || 'Magazijn dashboard' ?></h1>
+            <p class="app-page-subtitle"><?= (model && model.pageSubtitle) || 'Grabbelstock, ontvangsten, retouren, behoefte-uitgiftes, tellingen en meldingen.' ?></p>
+          </div>
+          <div class="app-page-meta">
+            <span class="role-badge"><?= (model && (model.currentUserRole || model.pageRole)) || 'warehouse' ?></span>
+            <? if (model && model.currentUserName) { ?>
+              <span class="chip"><?= model.currentUserName ?></span>
+            <? } ?>
+            <? if (model && model.currentUserEmail) { ?>
+              <span class="chip"><?= model.currentUserEmail ?></span>
+            <? } ?>
+          </div>
+        </header>
 
-  <body>
-    <div class="wrap">
-      <?!= include('_shared_dashboard_header', model) ?>
-      <?!= include('_shared_dashboard_stats', model) ?>
-
-      <?!= include('_shared_deliveries', model) ?>
-      <?!= include('_shared_receipts', model) ?>
-      <?!= include('_shared_returns', model) ?>
-      <?!= include('_shared_needissues', model) ?>
-      <?!= include('_shared_central', model) ?>
-      <?!= include('_shared_notifications', model) ?>
+        <section class="card section-pad">
+          <div class="loading-state">Magazijndashboard laden…</div>
+        </section>
+      </div>
     </div>
 
+    <script><?!= include('_shared_common_js', model) ?></script>
+    <script><?!= include('_shared_loader_js', model) ?></script>
     <script>
-      <?!= include('_shared_common_js', model) ?>
-    </script>
+      (function (window, document) {
+        'use strict';
 
-    <script>
-      <?!= include('_shared_deliveries_js', model) ?>
-    </script>
+        var APP = window.STOCKAPP = window.STOCKAPP || {};
+        var MODEL = APP.model || window.BOOTSTRAP_MODEL || {};
 
-    <script>
-      <?!= include('_shared_receipts_js', model) ?>
-    </script>
+        if (APP.warehousePageInitialized) return;
+        APP.warehousePageInitialized = true;
 
-    <script>
-      <?!= include('_shared_returns_js', model) ?>
-    </script>
+        function validateWarehouseContext() {
+          var role = APP.safeText(MODEL.currentUserRole || MODEL.pageRole).toLowerCase();
 
-    <script>
-      <?!= include('_shared_needissues_js', model) ?>
-    </script>
+          if (!role) {
+            throw new Error('Geen gebruikersrol gevonden voor het magazijndashboard.');
+          }
 
-    <script>
-      <?!= include('_shared_central_js', model) ?>
-    </script>
+          if (role !== 'warehouse' && role !== 'manager') {
+            throw new Error('Ongeldige context voor Warehouse.html.');
+          }
 
-    <script>
-      <?!= include('_shared_notifications_js', model) ?>
-    </script>
+          return role;
+        }
 
-    <script>
-      <?!= include('_shared_loader_js', model) ?>
-    </script>
+        function syncBodyState() {
+          var body = document.body;
+          if (!body) return;
 
-    <script>
-      initSharedShell();
+          body.classList.add('page-warehouse');
+          body.setAttribute('data-page-role', APP.safeText(MODEL.pageRole || 'warehouse'));
+        }
+
+        function exposeWarehouseMeta() {
+          window.WAREHOUSE_APP_META = {
+            pageRole: APP.safeText(MODEL.pageRole || 'warehouse'),
+            currentUserName: APP.safeText(MODEL.currentUserName || ''),
+            currentUserRole: APP.safeText(MODEL.currentUserRole || ''),
+            currentUserEmail: APP.safeText(MODEL.currentUserEmail || '')
+          };
+        }
+
+        function initWarehousePage() {
+          validateWarehouseContext();
+          syncBodyState();
+          exposeWarehouseMeta();
+
+          if (typeof APP.initSharedDashboard === 'function') {
+            APP.initSharedDashboard();
+          }
+        }
+
+        try {
+          initWarehousePage();
+        } catch (err) {
+          var root = document.getElementById('warehouseApp');
+          if (root) {
+            root.innerHTML = [
+              '<div class="app-container">',
+                '<section class="card section-pad">',
+                  '<div class="banner banner-error">',
+                    APP.escapeHtml(err.message || 'Magazijndashboard kon niet geladen worden.'),
+                  '</div>',
+                '</section>',
+              '</div>'
+            ].join('');
+          }
+        }
+
+      })(window, document);
     </script>
   </body>
 </html>

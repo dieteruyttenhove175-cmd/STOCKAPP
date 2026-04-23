@@ -1,5 +1,8 @@
 /* =========================================================
-   52_MobileWarehouseService.gs — mobiel magazijn service
+   52_MobileWarehouseService.gs
+   Refactor for mobile warehouse backend
+   - keeps mobile warehouse access + dashboard in one place
+   - aligns payload names with the new mobile UI shell
    ========================================================= */
 
 /* ---------------------------------------------------------
@@ -11,7 +14,7 @@ function getMobileWarehouseLocationCode(code) {
 }
 
 function parseMobileWarehouseLocation(location) {
-  const text = safeText(location);
+  var text = safeText(location);
   if (!/^Mobiel:/i.test(text)) return '';
   return safeText(text.split(':').slice(1).join(':'));
 }
@@ -31,7 +34,7 @@ function mapMobileWarehouse(row) {
     type: safeText(row.Type),
     active: row.Actief === undefined ? true : isTrue(row.Actief),
     managerNaam: safeText(row.ManagerNaam),
-    opmerking: safeText(row.Opmerking)
+    opmerking: safeText(row.Opmerking),
   };
 }
 
@@ -42,34 +45,36 @@ function mapMobileWarehouse(row) {
 function getAllMobileWarehouses() {
   return readObjectsSafe(TABS.MOBILE_WAREHOUSES)
     .map(mapMobileWarehouse)
-    .filter(x => x.active)
-    .sort((a, b) => safeText(a.naam).localeCompare(safeText(b.naam)));
+    .filter(function (x) { return x.active; })
+    .sort(function (a, b) {
+      return safeText(a.naam).localeCompare(safeText(b.naam));
+    });
 }
 
 function getMobileWarehouseByCode(code) {
-  const value = safeText(code);
+  var value = safeText(code);
   if (!value) return null;
-  return getAllMobileWarehouses().find(x => safeText(x.code) === value) || null;
+  return getAllMobileWarehouses().find(function (x) {
+    return safeText(x.code) === value;
+  }) || null;
 }
 
 function getDefaultMobileWarehouseCode() {
-  const rows = getAllMobileWarehouses();
+  var rows = getAllMobileWarehouses();
   if (!rows.length) return '';
   return safeText(rows[0].code);
 }
 
 function getEffectiveMobileWarehouseCodeForUser(user, requestedCode) {
-  const asked = safeText(requestedCode);
-  const own = safeText((user && user.mobileWarehouseCode) || '');
+  var asked = safeText(requestedCode);
+  var own = safeText((user && user.mobileWarehouseCode) || '');
 
   if (user && user.rol === ROLE.ADMIN) {
     return asked || own || getDefaultMobileWarehouseCode();
   }
-
   if (user && user.rol === ROLE.MANAGER) {
     return asked || own || getDefaultMobileWarehouseCode();
   }
-
   if (user && user.rol === ROLE.MOBILE_WAREHOUSE) {
     if (own && asked && own !== asked) {
       throw new Error('Je kan enkel je eigen mobiel magazijn openen.');
@@ -81,22 +86,26 @@ function getEffectiveMobileWarehouseCodeForUser(user, requestedCode) {
 }
 
 function assertMobileWarehouseAccess(sessionId, requestedCode) {
-  const user = requireLoggedInUser(sessionId);
+  var user = requireLoggedInUser(sessionId);
 
   if (!roleAllowed(user, [ROLE.MOBILE_WAREHOUSE, ROLE.MANAGER])) {
     throw new Error('Geen rechten voor mobiel magazijn.');
   }
 
-  const mobileWarehouseCode = getEffectiveMobileWarehouseCodeForUser(user, requestedCode);
-  if (!mobileWarehouseCode) throw new Error('Geen mobiel magazijn gekoppeld of beschikbaar.');
+  var mobileWarehouseCode = getEffectiveMobileWarehouseCodeForUser(user, requestedCode);
+  if (!mobileWarehouseCode) {
+    throw new Error('Geen mobiel magazijn gekoppeld of beschikbaar.');
+  }
 
-  const warehouse = getMobileWarehouseByCode(mobileWarehouseCode);
-  if (!warehouse) throw new Error('Mobiel magazijn niet gevonden.');
+  var warehouse = getMobileWarehouseByCode(mobileWarehouseCode);
+  if (!warehouse) {
+    throw new Error('Mobiel magazijn niet gevonden.');
+  }
 
   return {
-    user,
-    mobileWarehouseCode,
-    warehouse
+    user: user,
+    mobileWarehouseCode: mobileWarehouseCode,
+    warehouse: warehouse,
   };
 }
 
@@ -109,24 +118,89 @@ function pushMobileWarehouseNotification(type, title, message, bronType, bronId,
     rol: NOTIFICATION_ROLE.MOBILE_WAREHOUSE,
     ontvangerCode: safeText(mobileWarehouseCode) || 'MOBIEL',
     ontvangerNaam: 'Mobiel magazijn',
-    type,
+    type: type,
     titel: title,
     bericht: message,
-    bronType,
-    bronId
+    bronType: bronType,
+    bronId: bronId,
   });
 }
 
 function getNotificationsForMobileWarehouse(mobileWarehouseCode) {
-  const code = safeText(mobileWarehouseCode);
+  var code = safeText(mobileWarehouseCode);
 
   return readObjectsSafe(TABS.NOTIFICATIONS)
     .map(mapNotification)
-    .filter(item =>
-      item.rol === NOTIFICATION_ROLE.MOBILE_WAREHOUSE &&
-      (!code || safeText(item.ontvangerCode) === code || safeText(item.ontvangerCode) === 'MOBIEL')
-    )
-    .sort((a, b) => safeText(b.aangemaaktOpRaw).localeCompare(safeText(a.aangemaaktOpRaw)));
+    .filter(function (item) {
+      return item.rol === NOTIFICATION_ROLE.MOBILE_WAREHOUSE &&
+        (!code ||
+          safeText(item.ontvangerCode) === code ||
+          safeText(item.ontvangerCode) === 'MOBIEL');
+    })
+    .sort(function (a, b) {
+      return safeText(b.aangemaaktOpRaw).localeCompare(safeText(a.aangemaaktOpRaw));
+    });
+}
+
+function markAllMobileWarehouseNotificationsRead(payload) {
+  payload = payload || {};
+
+  var sessionId = getPayloadSessionId(payload);
+  var access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
+  var mobileWarehouseCode = access.mobileWarehouseCode;
+
+  var sheet = getSheetOrThrow(TABS.NOTIFICATIONS);
+  var values = getAllValues(TABS.NOTIFICATIONS);
+  if (!values.length) return { updatedCount: 0 };
+
+  var headers = values[0];
+  var dataRows = values.slice(1);
+
+  var updatedCount = 0;
+  var updatedRows = dataRows.map(function (row) {
+    var obj = rowToObject(headers, row);
+    var mapped = mapNotification(obj);
+
+    var matchesRole = mapped.rol === NOTIFICATION_ROLE.MOBILE_WAREHOUSE;
+    var matchesWarehouse =
+      !mobileWarehouseCode ||
+      safeText(mapped.ontvangerCode) === mobileWarehouseCode ||
+      safeText(mapped.ontvangerCode) === 'MOBIEL';
+
+    if (!matchesRole || !matchesWarehouse) {
+      return row;
+    }
+
+    var currentStatus = safeText(obj.Status || obj.status);
+    if (currentStatus && currentStatus !== NOTIFICATION_STATUS.OPEN) {
+      return row;
+    }
+
+    obj.Status = NOTIFICATION_STATUS.READ;
+    obj.GelezenOp = Utilities.formatDate(new Date(), TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss");
+    updatedCount += 1;
+    return buildRowFromHeaders(headers, obj);
+  });
+
+  writeFullTable(TABS.NOTIFICATIONS, headers, updatedRows);
+
+  if (updatedCount) {
+    writeAudit({
+      actie: 'MARK_MOBILE_NOTIFICATIONS_READ',
+      actor: access.user,
+      documentType: 'Notificaties',
+      documentId: mobileWarehouseCode || 'MOBIEL',
+      details: {
+        updatedCount: updatedCount,
+        mobileWarehouseCode: mobileWarehouseCode,
+      },
+    });
+  }
+
+  return {
+    updatedCount: updatedCount,
+    mobileWarehouseCode: mobileWarehouseCode,
+  };
 }
 
 /* ---------------------------------------------------------
@@ -134,114 +208,117 @@ function getNotificationsForMobileWarehouse(mobileWarehouseCode) {
    --------------------------------------------------------- */
 
 function buildAllMobileWarehouseStockRows() {
-  const articles = readObjectsSafe(TABS.SUPPLIER_ARTICLES).map(mapSupplierArticle);
-  const articleMap = {};
-  articles.forEach(item => {
+  var articles = readObjectsSafe(TABS.SUPPLIER_ARTICLES).map(mapSupplierArticle);
+  var articleMap = {};
+  articles.forEach(function (item) {
     articleMap[item.artikelCode] = item;
   });
 
-  const moves = readObjectsSafe(TABS.WAREHOUSE_MOVEMENTS).map(mapWarehouseMovement);
-  const grouped = {};
+  var moves = readObjectsSafe(TABS.WAREHOUSE_MOVEMENTS).map(mapWarehouseMovement);
+  var grouped = {};
 
-  moves.forEach(move => {
-    const code = safeText(move.artikelCode);
+  moves.forEach(function (move) {
+    var code = safeText(move.artikelCode);
     if (!code) return;
 
-    const from = safeText(move.locatieVan);
-    const to = safeText(move.locatieNaar);
+    var from = safeText(move.locatieVan);
+    var to = safeText(move.locatieNaar);
+    var qtyIn = safeNumber(move.aantalIn, 0);
+    var qtyOut = safeNumber(move.aantalUit, 0);
+    var net = safeNumber(move.nettoAantal, 0);
 
-    const qtyIn = safeNumber(move.aantalIn, 0);
-    const qtyOut = safeNumber(move.aantalUit, 0);
-    const net = safeNumber(move.nettoAantal, 0);
-
-    if (isMobileWarehouseLocation(to)) {
-      const mwCode = parseMobileWarehouseLocation(to);
-      const key = `${mwCode}|${code}`;
-
+    function ensureGroup(mwCode) {
+      var key = mwCode + '|' + code;
       if (!grouped[key]) {
         grouped[key] = {
           mobileWarehouseCode: mwCode,
           mobileWarehouseNaam: (getMobileWarehouseByCode(mwCode) || {}).naam || mwCode,
           artikelCode: code,
-          artikelOmschrijving: safeText(move.artikelOmschrijving) || safeText(articleMap[code] && articleMap[code].artikelOmschrijving),
-          eenheid: safeText(move.eenheid) || safeText(articleMap[code] && articleMap[code].eenheid),
-          typeMateriaal: safeText(move.typeMateriaal) || determineMaterialTypeFromArticle(code),
+          artikelOmschrijving:
+            safeText(move.artikelOmschrijving) ||
+            safeText(articleMap[code] && articleMap[code].artikelOmschrijving),
+          eenheid:
+            safeText(move.eenheid) ||
+            safeText(articleMap[code] && articleMap[code].eenheid),
+          typeMateriaal:
+            safeText(move.typeMateriaal) ||
+            determineMaterialTypeFromArticle(code),
           voorraadMobiel: 0,
           laatsteMutatie: safeText(move.datumBoeking),
-          laatsteMutatieRaw: safeText(move.datumBoekingRaw)
+          laatsteMutatieRaw: safeText(move.datumBoekingRaw),
         };
       }
+      return grouped[key];
+    }
 
-      grouped[key].voorraadMobiel += qtyIn || Math.abs(net);
+    if (isMobileWarehouseLocation(to)) {
+      var mwTo = parseMobileWarehouseLocation(to);
+      var rowTo = ensureGroup(mwTo);
+      rowTo.voorraadMobiel += qtyIn || Math.abs(net);
 
-      if (safeText(move.datumBoekingRaw) > safeText(grouped[key].laatsteMutatieRaw)) {
-        grouped[key].laatsteMutatie = safeText(move.datumBoeking);
-        grouped[key].laatsteMutatieRaw = safeText(move.datumBoekingRaw);
+      if (safeText(move.datumBoekingRaw) > safeText(rowTo.laatsteMutatieRaw)) {
+        rowTo.laatsteMutatie = safeText(move.datumBoeking);
+        rowTo.laatsteMutatieRaw = safeText(move.datumBoekingRaw);
       }
     }
 
     if (isMobileWarehouseLocation(from)) {
-      const mwCode = parseMobileWarehouseLocation(from);
-      const key = `${mwCode}|${code}`;
+      var mwFrom = parseMobileWarehouseLocation(from);
+      var rowFrom = ensureGroup(mwFrom);
+      rowFrom.voorraadMobiel -= qtyOut || Math.abs(net);
 
-      if (!grouped[key]) {
-        grouped[key] = {
-          mobileWarehouseCode: mwCode,
-          mobileWarehouseNaam: (getMobileWarehouseByCode(mwCode) || {}).naam || mwCode,
-          artikelCode: code,
-          artikelOmschrijving: safeText(move.artikelOmschrijving) || safeText(articleMap[code] && articleMap[code].artikelOmschrijving),
-          eenheid: safeText(move.eenheid) || safeText(articleMap[code] && articleMap[code].eenheid),
-          typeMateriaal: safeText(move.typeMateriaal) || determineMaterialTypeFromArticle(code),
-          voorraadMobiel: 0,
-          laatsteMutatie: safeText(move.datumBoeking),
-          laatsteMutatieRaw: safeText(move.datumBoekingRaw)
-        };
-      }
-
-      grouped[key].voorraadMobiel -= qtyOut || Math.abs(net);
-
-      if (safeText(move.datumBoekingRaw) > safeText(grouped[key].laatsteMutatieRaw)) {
-        grouped[key].laatsteMutatie = safeText(move.datumBoeking);
-        grouped[key].laatsteMutatieRaw = safeText(move.datumBoekingRaw);
+      if (safeText(move.datumBoekingRaw) > safeText(rowFrom.laatsteMutatieRaw)) {
+        rowFrom.laatsteMutatie = safeText(move.datumBoeking);
+        rowFrom.laatsteMutatieRaw = safeText(move.datumBoekingRaw);
       }
     }
   });
 
   return Object.keys(grouped)
-    .map(key => grouped[key])
-    .filter(item => safeNumber(item.voorraadMobiel, 0) !== 0)
-    .sort((a, b) =>
-      safeText(a.mobileWarehouseNaam).localeCompare(safeText(b.mobileWarehouseNaam)) ||
-      safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving))
-    );
+    .map(function (key) { return grouped[key]; })
+    .filter(function (item) { return safeNumber(item.voorraadMobiel, 0) !== 0; })
+    .sort(function (a, b) {
+      return (
+        safeText(a.mobileWarehouseNaam).localeCompare(safeText(b.mobileWarehouseNaam)) ||
+        safeText(a.artikelOmschrijving).localeCompare(safeText(b.artikelOmschrijving))
+      );
+    });
 }
 
 function buildMobileWarehouseStockRows(mobileWarehouseCode) {
-  const code = safeText(mobileWarehouseCode);
-  return buildAllMobileWarehouseStockRows().filter(item => safeText(item.mobileWarehouseCode) === code);
+  var code = safeText(mobileWarehouseCode);
+  return buildAllMobileWarehouseStockRows().filter(function (item) {
+    return safeText(item.mobileWarehouseCode) === code;
+  });
 }
 
 function buildMobileWarehouseStockMap(mobileWarehouseCode) {
-  const map = {};
-  buildMobileWarehouseStockRows(mobileWarehouseCode).forEach(item => {
+  var map = {};
+  buildMobileWarehouseStockRows(mobileWarehouseCode).forEach(function (item) {
     map[item.artikelCode] = item;
   });
   return map;
 }
 
 function buildMobileWarehouseSummary(mobileWarehouseCode) {
-  const rows = buildMobileWarehouseStockRows(mobileWarehouseCode);
+  var rows = buildMobileWarehouseStockRows(mobileWarehouseCode);
 
   return {
     mobileWarehouseCode: safeText(mobileWarehouseCode),
     artikels: rows.length,
-    totaalAantal: rows.reduce((sum, row) => sum + safeNumber(row.voorraadMobiel, 0), 0),
+    totaalAantal: rows.reduce(function (sum, row) {
+      return sum + safeNumber(row.voorraadMobiel, 0);
+    }, 0),
     grabbelAantal: rows
-      .filter(row => safeText(row.typeMateriaal) === 'Grabbel')
-      .reduce((sum, row) => sum + safeNumber(row.voorraadMobiel, 0), 0),
+      .filter(function (row) { return safeText(row.typeMateriaal) === 'Grabbel'; })
+      .reduce(function (sum, row) {
+        return sum + safeNumber(row.voorraadMobiel, 0);
+      }, 0),
     behoefteAantal: rows
-      .filter(row => safeText(row.typeMateriaal) === 'Behoefte')
-      .reduce((sum, row) => sum + safeNumber(row.voorraadMobiel, 0), 0)
+      .filter(function (row) { return safeText(row.typeMateriaal) === 'Behoefte'; })
+      .reduce(function (sum, row) {
+        return sum + safeNumber(row.voorraadMobiel, 0);
+      }, 0),
   };
 }
 
@@ -250,28 +327,84 @@ function buildMobileWarehouseSummary(mobileWarehouseCode) {
    --------------------------------------------------------- */
 
 function buildMobileWarehouseRequestRows(mobileWarehouseCode) {
-  const code = safeText(mobileWarehouseCode);
+  var code = safeText(mobileWarehouseCode);
 
-  if (typeof getAllMobileRequests !== 'function' || typeof getAllMobileRequestLines !== 'function') {
+  if (
+    typeof getAllMobileRequests !== 'function' ||
+    typeof getAllMobileRequestLines !== 'function' ||
+    typeof buildMobileRequestsWithLines !== 'function'
+  ) {
     return [];
   }
 
   return buildMobileRequestsWithLines(getAllMobileRequests(), getAllMobileRequestLines())
-    .filter(item => !code || safeText(item.mobileWarehouseCode) === code)
-    .sort((a, b) =>
-      `${safeText(b.documentDatumIso)} ${safeText(b.aanvraagId)}`.localeCompare(
-        `${safeText(a.documentDatumIso)} ${safeText(a.aanvraagId)}`
-      )
-    );
+    .filter(function (item) {
+      return !code || safeText(item.mobileWarehouseCode) === code;
+    })
+    .sort(function (a, b) {
+      return (
+        (safeText(b.documentDatumIso) + ' ' + safeText(b.aanvraagId)).localeCompare(
+          safeText(a.documentDatumIso) + ' ' + safeText(a.aanvraagId)
+        )
+      );
+    });
 }
 
 function buildMobileWarehouseRequestQueue(mobileWarehouseCode) {
-  return buildMobileWarehouseRequestRows(mobileWarehouseCode)
-    .filter(item => [
+  return buildMobileWarehouseRequestRows(mobileWarehouseCode).filter(function (item) {
+    return [
       MOBILE_REQUEST_STATUS.SUBMITTED,
       MOBILE_REQUEST_STATUS.APPROVED,
-      MOBILE_REQUEST_STATUS.BOOKED
-    ].includes(safeText(item.status)));
+      MOBILE_REQUEST_STATUS.BOOKED,
+    ].indexOf(safeText(item.status)) >= 0;
+  });
+}
+
+/* ---------------------------------------------------------
+   Transfer history
+   --------------------------------------------------------- */
+
+function buildMobileWarehouseTransferHistory(mobileWarehouseCode) {
+  var code = safeText(mobileWarehouseCode);
+  if (!code) return [];
+
+  if (typeof getAllTransfers === 'function') {
+    return getAllTransfers()
+      .filter(function (item) {
+        return (
+          safeText(item.vanLocatie) === getMobileWarehouseLocationCode(code) ||
+          safeText(item.naarLocatie) === getMobileWarehouseLocationCode(code)
+        );
+      })
+      .sort(function (a, b) {
+        return safeText(b.documentDatumIso || b.documentDatum).localeCompare(
+          safeText(a.documentDatumIso || a.documentDatum)
+        );
+      });
+  }
+
+  if (!TABS.TRANSFERS) return [];
+
+  return readObjectsSafe(TABS.TRANSFERS)
+    .map(function (row) {
+      return {
+        transferId: safeText(row.TransferID || row.TransferId || row.ID),
+        documentDatum: safeText(row.DocumentDatum || row.Datum),
+        documentDatumIso: safeText(row.DocumentDatumIso || row.DocumentDatum || row.Datum),
+        vanLocatie: safeText(row.VanLocatie),
+        naarLocatie: safeText(row.NaarLocatie),
+        status: safeText(row.Status),
+      };
+    })
+    .filter(function (item) {
+      return (
+        safeText(item.vanLocatie) === getMobileWarehouseLocationCode(code) ||
+        safeText(item.naarLocatie) === getMobileWarehouseLocationCode(code)
+      );
+    })
+    .sort(function (a, b) {
+      return safeText(b.documentDatumIso).localeCompare(safeText(a.documentDatumIso));
+    });
 }
 
 /* ---------------------------------------------------------
@@ -279,37 +412,46 @@ function buildMobileWarehouseRequestQueue(mobileWarehouseCode) {
    --------------------------------------------------------- */
 
 function filterMobileWarehouseStockRows(rows, filters) {
-  const source = rows || [];
-  const f = filters || {};
+  var source = rows || [];
+  var f = filters || {};
+  var materialType = safeText(f.materialType);
+  var articleCodePrefix = safeText(f.articleCodePrefix).toLowerCase();
+  var inStockOnly = !!f.inStockOnly;
+  var minQty =
+    f.minQty === '' || f.minQty === null || f.minQty === undefined
+      ? null
+      : Number(f.minQty);
+  var sortBy = safeText(f.sortBy || 'artikel');
+  var sortDir = safeText(f.sortDir || 'asc').toLowerCase();
 
-  const materialType = safeText(f.materialType);
-  const articleCodePrefix = safeText(f.articleCodePrefix).toLowerCase();
-  const inStockOnly = !!f.inStockOnly;
-  const minQty = f.minQty === '' || f.minQty === null || f.minQty === undefined ? null : Number(f.minQty);
-  const sortBy = safeText(f.sortBy || 'artikel');
-  const sortDir = safeText(f.sortDir || 'asc').toLowerCase();
-
-  let result = source.slice();
+  var result = source.slice();
 
   if (materialType) {
-    result = result.filter(row => safeText(row.typeMateriaal) === materialType);
+    result = result.filter(function (row) {
+      return safeText(row.typeMateriaal) === materialType;
+    });
   }
 
   if (articleCodePrefix) {
-    result = result.filter(row => safeText(row.artikelCode).toLowerCase().startsWith(articleCodePrefix));
+    result = result.filter(function (row) {
+      return safeText(row.artikelCode).toLowerCase().startsWith(articleCodePrefix);
+    });
   }
 
   if (inStockOnly) {
-    result = result.filter(row => safeNumber(row.voorraadMobiel, 0) > 0);
+    result = result.filter(function (row) {
+      return safeNumber(row.voorraadMobiel, 0) > 0;
+    });
   }
 
   if (minQty !== null && !isNaN(minQty)) {
-    result = result.filter(row => safeNumber(row.voorraadMobiel, 0) >= minQty);
+    result = result.filter(function (row) {
+      return safeNumber(row.voorraadMobiel, 0) >= minQty;
+    });
   }
 
-  const factor = sortDir === 'desc' ? -1 : 1;
-
-  result.sort((a, b) => {
+  var factor = sortDir === 'desc' ? -1 : 1;
+  result.sort(function (a, b) {
     if (sortBy === 'qty') {
       return factor * (safeNumber(a.voorraadMobiel, 0) - safeNumber(b.voorraadMobiel, 0));
     }
@@ -328,10 +470,10 @@ function filterMobileWarehouseStockRows(rows, filters) {
 function getMobileWarehouseFilteredStock(payload) {
   if (!payload) throw new Error('Geen payload ontvangen.');
 
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
+  var sessionId = getPayloadSessionId(payload);
+  var access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
+  var rows = buildMobileWarehouseStockRows(access.mobileWarehouseCode);
 
-  const rows = buildMobileWarehouseStockRows(access.mobileWarehouseCode);
   return filterMobileWarehouseStockRows(rows, payload.filters || {});
 }
 
@@ -342,14 +484,14 @@ function getMobileWarehouseFilteredStock(payload) {
 function getMobileWarehouseDashboardData(payload) {
   payload = payload || {};
 
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
+  var sessionId = getPayloadSessionId(payload);
+  var access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
+  var warehouseCode = access.mobileWarehouseCode;
 
-  const warehouseCode = access.mobileWarehouseCode;
-  const stockRows = buildMobileWarehouseStockRows(warehouseCode);
-  const filteredStockRows = filterMobileWarehouseStockRows(stockRows, payload.filters || {});
-  const requestQueue = buildMobileWarehouseRequestQueue(warehouseCode);
-  const allRequests = buildMobileWarehouseRequestRows(warehouseCode);
+  var stockRows = buildMobileWarehouseStockRows(warehouseCode);
+  var filteredStockRows = filterMobileWarehouseStockRows(stockRows, payload.filters || {});
+  var requestQueue = buildMobileWarehouseRequestQueue(warehouseCode);
+  var allRequests = buildMobileWarehouseRequestRows(warehouseCode);
 
   return {
     warehouse: access.warehouse,
@@ -357,21 +499,31 @@ function getMobileWarehouseDashboardData(payload) {
     availableWarehouses: getAllMobileWarehouses(),
     summary: buildMobileWarehouseSummary(warehouseCode),
     stockRows: filteredStockRows,
-    centralWarehouse: getCentralWarehouseOverview(),
-    technicians: getActiveTechnicians().map(t => ({ code: t.code, naam: t.naam })),
+    centralWarehouse:
+      typeof getCentralWarehouseOverview === 'function'
+        ? getCentralWarehouseOverview()
+        : null,
+    technicians:
+      typeof getActiveTechnicians === 'function'
+        ? getActiveTechnicians().map(function (t) {
+            return { code: t.code, naam: t.naam };
+          })
+        : [],
     requestQueue: requestQueue,
     requestHistory: allRequests,
+    transferHistory: buildMobileWarehouseTransferHistory(warehouseCode),
     notifications: getNotificationsForMobileWarehouse(warehouseCode),
-    recurringBusCountSummary: typeof buildBusCountTriggerSummary === 'function'
-      ? buildBusCountTriggerSummary()
-      : null,
-    generatedAt: Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm')
+    recurringBusCountSummary:
+      typeof buildBusCountTriggerSummary === 'function'
+        ? buildBusCountTriggerSummary()
+        : null,
+    generatedAt: Utilities.formatDate(new Date(), TIMEZONE, 'dd/MM/yyyy HH:mm'),
   };
 }
 
 /* ---------------------------------------------------------
    Directe transfers
-   Vereist bestaand transferblok met createTransfer/saveTransferLines
+   Vereist bestaand transferblok met createTransfer / saveTransferLines
    --------------------------------------------------------- */
 
 function assertTransferServiceAvailable() {
@@ -383,217 +535,117 @@ function assertTransferServiceAvailable() {
   }
 }
 
+function normalizeMobileToBusTransferPayload(payload) {
+  var normalized = Object.assign({}, payload || {});
+  normalized.doelTechniekerCode = safeText(
+    payload.doelTechniekerCode || payload.technicianCode || payload.techCode
+  );
+  normalized.documentDatum = safeText(
+    payload.documentDatum || payload.documentDate
+  );
+  normalized.reden = safeText(payload.reden || payload.reason);
+  normalized.opmerking = safeText(payload.opmerking || payload.remark);
+  normalized.lines = Array.isArray(payload.lines) ? payload.lines : [];
+  return normalized;
+}
+
 function createDirectMobileToBusTransfer(payload) {
   if (!payload) throw new Error('Geen payload ontvangen.');
+
   assertTransferServiceAvailable();
 
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
+  var normalized = normalizeMobileToBusTransferPayload(payload);
+  var sessionId = getPayloadSessionId(payload);
+  var access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
 
-  const doelTechniekerCode = safeText(payload.doelTechniekerCode);
-  const documentDatum = safeText(payload.documentDatum);
-  const reden = safeText(payload.reden);
-  const opmerking = safeText(payload.opmerking);
-  const actor = safeText(payload.actor || access.user.naam || access.user.email || 'MobielMagazijn');
-  const lines = Array.isArray(payload.lines) ? payload.lines : [];
+  var doelTechniekerCode = safeText(normalized.doelTechniekerCode);
+  var documentDatum = safeText(normalized.documentDatum);
+  var reden = safeText(normalized.reden);
+  var opmerking = safeText(normalized.opmerking);
+  var actor = safeText(payload.actor || access.user.naam || access.user.email || 'MobielMagazijn');
+  var lines = normalized.lines;
 
   if (!doelTechniekerCode) throw new Error('DoelTechniekerCode is verplicht.');
   if (!documentDatum) throw new Error('Documentdatum is verplicht.');
   if (!reden) throw new Error('Reden is verplicht.');
   if (!lines.length) throw new Error('Geen transferlijnen ontvangen.');
 
-  const stockMap = buildMobileWarehouseStockMap(access.mobileWarehouseCode);
+  var stockMap = buildMobileWarehouseStockMap(access.mobileWarehouseCode);
 
-  lines.forEach(line => {
-    const code = safeText(line.artikelCode);
-    const qty = safeNumber(line.aantal, 0);
-    const current = stockMap[code] ? safeNumber(stockMap[code].voorraadMobiel, 0) : 0;
+  lines.forEach(function (line) {
+    var code = safeText(line.artikelCode);
+    var qty = safeNumber(line.aantal, 0);
+    var current = stockMap[code] ? safeNumber(stockMap[code].voorraadMobiel, 0) : 0;
 
     if (!code) throw new Error('ArtikelCode ontbreekt.');
-    if (qty <= 0) throw new Error(`Aantal moet groter zijn dan 0 voor artikel ${code}.`);
+    if (qty <= 0) throw new Error('Aantal moet groter zijn dan 0 voor artikel ' + code + '.');
     if (qty > current) {
-      throw new Error(`Onvoldoende voorraad in mobiel magazijn voor artikel ${code}. Beschikbaar: ${current}`);
+      throw new Error(
+        'Onvoldoende voorraad in mobiel magazijn voor artikel ' + code +
+        '. Beschikbaar: ' + current + ', gevraagd: ' + qty + '.'
+      );
     }
   });
 
-  const result = createTransfer({
+  var transferPayload = {
     sessionId: sessionId,
-    flowType: TRANSFER_FLOW.MOBILE_TO_BUS,
-    mobileWarehouseCode: access.mobileWarehouseCode,
+    flowType: 'MOBILE_TO_BUS',
+    vanLocatie: getMobileWarehouseLocationCode(access.mobileWarehouseCode),
+    naarLocatie:
+      typeof getBusLocationCode === 'function'
+        ? getBusLocationCode(doelTechniekerCode)
+        : ('Bus:' + doelTechniekerCode),
     doelTechniekerCode: doelTechniekerCode,
     documentDatum: documentDatum,
     reden: reden,
     opmerking: opmerking,
-    actor: actor
-  });
+    actor: actor,
+  };
+
+  var transfer = createTransfer(transferPayload);
 
   saveTransferLines({
     sessionId: sessionId,
-    transferId: result.transferId,
-    lines: lines
+    transferId: transfer.transferId || transfer.TransferID || transfer.id,
+    lines: lines.map(function (line) {
+      return {
+        artikelCode: safeText(line.artikelCode),
+        artikelOmschrijving: safeText(line.artikelOmschrijving),
+        eenheid: safeText(line.eenheid) || 'Stuk',
+        aantal: safeNumber(line.aantal, 0),
+      };
+    }),
   });
 
-  pushTechnicianNotification(
-    doelTechniekerCode,
-    getTechnicianNameByCode(doelTechniekerCode),
-    'MobielTransferAangemaakt',
-    'Transfer vanuit mobiel magazijn',
-    `Er is een transfer vanuit mobiel magazijn aangemaakt naar jouw bus (${result.transferId}).`,
-    'Transfer',
-    result.transferId
-  );
+  if (typeof submitTransfer === 'function' && isTrue(payload.autoSubmit)) {
+    submitTransfer({
+      sessionId: sessionId,
+      transferId: transfer.transferId || transfer.TransferID || transfer.id,
+    });
+  }
 
-  writeAudit(
-    'Mobiel -> bus transfer aangemaakt',
-    access.user.rol,
-    actor,
-    'Transfer',
-    result.transferId,
-    {
+  if (typeof pushTechnicianNotification === 'function') {
+    pushTechnicianNotification(
+      'Transfer',
+      'Aanvulling vanuit mobiel magazijn',
+      'Er werd een transfer klaargezet vanuit mobiel magazijn.',
+      'Transfer',
+      transfer.transferId || transfer.TransferID || transfer.id,
+      doelTechniekerCode
+    );
+  }
+
+  writeAudit({
+    actie: 'CREATE_DIRECT_MOBILE_TO_BUS_TRANSFER',
+    actor: access.user,
+    documentType: 'Transfer',
+    documentId: transfer.transferId || transfer.TransferID || transfer.id,
+    details: {
       mobileWarehouseCode: access.mobileWarehouseCode,
       doelTechniekerCode: doelTechniekerCode,
-      lijnen: lines.length,
-      reden: reden
-    }
-  );
-
-  return {
-    success: true,
-    transferId: result.transferId,
-    message: 'Transfer mobiel -> bus aangemaakt.'
-  };
-}
-
-function createDirectCentralToMobileTransfer(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-  assertTransferServiceAvailable();
-
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
-
-  const documentDatum = safeText(payload.documentDatum);
-  const reden = safeText(payload.reden);
-  const opmerking = safeText(payload.opmerking);
-  const actor = safeText(payload.actor || access.user.naam || access.user.email || 'MobielMagazijn');
-  const lines = Array.isArray(payload.lines) ? payload.lines : [];
-
-  if (!documentDatum) throw new Error('Documentdatum is verplicht.');
-  if (!reden) throw new Error('Reden is verplicht.');
-  if (!lines.length) throw new Error('Geen transferlijnen ontvangen.');
-
-  const centralMap = buildCentralWarehouseMap();
-
-  lines.forEach(line => {
-    const code = safeText(line.artikelCode);
-    const qty = safeNumber(line.aantal, 0);
-    const current = centralMap[code] ? safeNumber(centralMap[code].voorraadCentraal, 0) : 0;
-
-    if (!code) throw new Error('ArtikelCode ontbreekt.');
-    if (qty <= 0) throw new Error(`Aantal moet groter zijn dan 0 voor artikel ${code}.`);
-    if (qty > current) {
-      throw new Error(`Onvoldoende voorraad in centraal magazijn voor artikel ${code}. Beschikbaar: ${current}`);
-    }
+      lineCount: lines.length,
+    },
   });
 
-  const result = createTransfer({
-    sessionId: sessionId,
-    flowType: TRANSFER_FLOW.CENTRAL_TO_MOBILE,
-    mobileWarehouseCode: access.mobileWarehouseCode,
-    documentDatum: documentDatum,
-    reden: reden,
-    opmerking: opmerking,
-    actor: actor
-  });
-
-  saveTransferLines({
-    sessionId: sessionId,
-    transferId: result.transferId,
-    lines: lines
-  });
-
-  writeAudit(
-    'Centraal -> mobiel transfer aangemaakt',
-    access.user.rol,
-    actor,
-    'Transfer',
-    result.transferId,
-    {
-      mobileWarehouseCode: access.mobileWarehouseCode,
-      lijnen: lines.length,
-      reden: reden
-    }
-  );
-
-  return {
-    success: true,
-    transferId: result.transferId,
-    message: 'Transfer centraal -> mobiel aangemaakt.'
-  };
-}
-
-function createDirectMobileToCentralTransfer(payload) {
-  if (!payload) throw new Error('Geen payload ontvangen.');
-  assertTransferServiceAvailable();
-
-  const sessionId = getPayloadSessionId(payload);
-  const access = assertMobileWarehouseAccess(sessionId, safeText(payload.mobileWarehouseCode));
-
-  const documentDatum = safeText(payload.documentDatum);
-  const reden = safeText(payload.reden);
-  const opmerking = safeText(payload.opmerking);
-  const actor = safeText(payload.actor || access.user.naam || access.user.email || 'MobielMagazijn');
-  const lines = Array.isArray(payload.lines) ? payload.lines : [];
-
-  if (!documentDatum) throw new Error('Documentdatum is verplicht.');
-  if (!reden) throw new Error('Reden is verplicht.');
-  if (!lines.length) throw new Error('Geen transferlijnen ontvangen.');
-
-  const stockMap = buildMobileWarehouseStockMap(access.mobileWarehouseCode);
-
-  lines.forEach(line => {
-    const code = safeText(line.artikelCode);
-    const qty = safeNumber(line.aantal, 0);
-    const current = stockMap[code] ? safeNumber(stockMap[code].voorraadMobiel, 0) : 0;
-
-    if (!code) throw new Error('ArtikelCode ontbreekt.');
-    if (qty <= 0) throw new Error(`Aantal moet groter zijn dan 0 voor artikel ${code}.`);
-    if (qty > current) {
-      throw new Error(`Onvoldoende voorraad in mobiel magazijn voor artikel ${code}. Beschikbaar: ${current}`);
-    }
-  });
-
-  const result = createTransfer({
-    sessionId: sessionId,
-    flowType: TRANSFER_FLOW.MOBILE_TO_CENTRAL,
-    mobileWarehouseCode: access.mobileWarehouseCode,
-    documentDatum: documentDatum,
-    reden: reden,
-    opmerking: opmerking,
-    actor: actor
-  });
-
-  saveTransferLines({
-    sessionId: sessionId,
-    transferId: result.transferId,
-    lines: lines
-  });
-
-  writeAudit(
-    'Mobiel -> centraal transfer aangemaakt',
-    access.user.rol,
-    actor,
-    'Transfer',
-    result.transferId,
-    {
-      mobileWarehouseCode: access.mobileWarehouseCode,
-      lijnen: lines.length,
-      reden: reden
-    }
-  );
-
-  return {
-    success: true,
-    transferId: result.transferId,
-    message: 'Transfer mobiel -> centraal aangemaakt.'
-  };
+  return transfer;
 }

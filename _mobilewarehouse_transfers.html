@@ -1,0 +1,90 @@
+<!-- _mobilewarehouse_transfers.html
+     Mobile warehouse transfers partial
+-->
+<div class="card">
+  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+    <div>
+      <h3 class="section-title" style="margin-bottom: 4px;">Transfers</h3>
+      <div class="muted">
+        Aanmaken en opvolgen van transfers van en naar het mobiel magazijn.
+      </div>
+    </div>
+
+    <div class="row">
+      <button type="button" class="secondary" onclick="loadMobileWarehouseData({ showBusyOverlay: true })">
+        Vernieuwen
+      </button>
+      <button type="button" class="secondary" onclick="switchMobileTab('stock')">
+        Naar stock
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="mobileTransfersInfo"></div>
+
+<div class="card">
+  <h3 class="section-title">Transferlijnen</h3>
+
+  <div class="grid four">
+    <div>
+      <label for="mobileTransferArticleCode">Artikelcode</label>
+      <input id="mobileTransferArticleCode" type="text" placeholder="Bijv. ART-001" />
+    </div>
+
+    <div>
+      <label for="mobileTransferArticleDescription">Omschrijving</label>
+      <input id="mobileTransferArticleDescription" type="text" placeholder="Artikelomschrijving" />
+    </div>
+
+    <div>
+      <label for="mobileTransferUnit">Eenheid</label>
+      <input id="mobileTransferUnit" type="text" placeholder="Stuk" />
+    </div>
+
+    <div>
+      <label for="mobileTransferQuantity">Aantal</label>
+      <input id="mobileTransferQuantity" type="number" min="0" step="1" value="1" />
+    </div>
+  </div>
+
+  <div class="row" style="margin-top: 12px;">
+    <button
+      type="button"
+      onclick="if (typeof addMobileTransferDraftLine === 'function') addMobileTransferDraftLine();"
+    >
+      Lijn toevoegen
+    </button>
+
+    <button
+      type="button"
+      class="secondary"
+      onclick="if (typeof clearMobileTransferDraft === 'function') clearMobileTransferDraft();"
+    >
+      Lijnen leegmaken
+    </button>
+
+    <button
+      type="button"
+      class="secondary"
+      onclick="if (typeof submitMobileTransferDraft === 'function') submitMobileTransferDraft();"
+    >
+      Transfer bewaren
+    </button>
+  </div>
+
+  <div class="muted" style="margin-top: 12px;">
+    De draftlogica voor transferlijnen wordt in de mobile JS-module gehouden,
+    zodat het scherm zelf dun blijft.
+  </div>
+</div>
+
+<div id="mobileTransferDraftTable"></div>
+
+<div class="card">
+  <h3 class="section-title">Recente transfers</h3>
+  <div class="muted" style="margin-bottom: 12px;">
+    Historiek en opvolging van geboekte of open transfers.
+  </div>
+  <div id="mobileTransferHistoryTable"></div>
+</div>
